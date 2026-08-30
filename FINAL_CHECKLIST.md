@@ -30,7 +30,7 @@
 - [x] Six actual-app submission screenshots
 - [ ] Public YouTube demo uploaded and URL placed in Devpost
 - [ ] Devpost submission form completed
-- [ ] Final public repository About section confirms detected MIT license
+- [x] Final public repository About section confirms detected MIT license
 - [ ] Final live/repository/video URLs re-opened in an incognito browser immediately before submission
 - [ ] Freeze submitted repository and production deployment after the September 3 deadline
 

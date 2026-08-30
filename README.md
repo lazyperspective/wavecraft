@@ -168,11 +168,30 @@ npm run build
 npm audit --omit=dev
 ```
 
+## Deployment
+
+Wavecraft is a static Vite client and requires no backend, database, environment variables, or API keys.
+
+```bash
+npm ci
+npm run build
+npx vercel --prod
+```
+
+The deployment output directory is `dist`. On Vercel teams that default to protected deployments, disable SSO deployment protection before judging:
+
+```bash
+vercel project protection disable <project-name> --sso
+```
+
+Then verify the live origin in a logged-out browser and confirm `document.modelContext.getTools()` discovers 68 tools. Equivalent static hosting on Netlify, Cloudflare Pages, Render, GitHub Pages, or another HTTPS provider works as well.
+
 ## Testing WebMCP
 
 - ChatGPT’s in-app browser supports WebMCP for challenge testing.
 - In compatible Chrome builds, enable `chrome://flags/#enable-webmcp-testing` as directed by the [official challenge page](https://webmcp.devpost.com/).
 - Open the live URL and use the prompts in [JUDGE_TESTING.md](./JUDGE_TESTING.md).
+- A compact copy/paste set is available in [DEMO_PROMPTS.md](./DEMO_PROMPTS.md).
 - In a development browser, the WebMCP panel confirms all 68 registrations and recent calls.
 
 The automated suite verifies:
