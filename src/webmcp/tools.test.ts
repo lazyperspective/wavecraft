@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest'
+import { ensureDemoSources } from '../audio/sourceRepository'
 import { createDemoProject } from '../domain/demoProject'
 import { useWavecraftStore } from '../store/wavecraftStore'
 import { createWavecraftTools } from './tools'
@@ -6,8 +7,10 @@ import { createWavecraftTools } from './tools'
 const selection = { kind: 'range' as const, start: 4.8, end: 43.2, trackIds: ['track_host', 'track_guest'] }
 
 function resetStore() {
+  const project = createDemoProject()
+  ensureDemoSources(project)
   useWavecraftStore.setState({
-    project: createDemoProject(), selection,
+    project, selection,
     playback: { status: 'stopped', playhead: 4.8, loop: null },
     view: { start: 0, end: 48, pixelsPerSecond: 24 },
     historyPast: [], historyFuture: [], recentToolCalls: [], lastError: null,
@@ -82,5 +85,29 @@ describe('external agent acceptance workflow', () => {
     expect(proposal.proposal.description).toContain('human-set guest level')
     expect(proposal.proposal.actions).toHaveLength(1)
     expect(proposal.proposal.actions[0].action).toMatchObject({ type: 'set_track_gain', trackId: 'track_host' })
+  })
+
+  it('rejects every agent mutation of a locked track', async () => {
+    expect(await run('lock_track', { track_id: 'track_host' })).toMatchObject({ success: true, locked: true })
+
+    expect(await run('ripple_delete_time_range', { start: 7.4, end: 9.2 })).toMatchObject({ success: false, error: 'LOCKED_OBJECT' })
+    expect(await run('validate_edit_plan', { actions: [{ type: 'ripple_delete_range', start: 7.4, end: 9.2 }] })).toMatchObject({ success: false, error: 'LOCKED_OBJECT' })
+    expect(await run('mute_track', { track_id: 'track_host' })).toMatchObject({ success: false, error: 'LOCKED_OBJECT' })
+    expect(await run('solo_track', { track_id: 'track_host' })).toMatchObject({ success: false, error: 'LOCKED_OBJECT' })
+    expect(await run('rename_track', { track_id: 'track_host', name: 'Changed through a lock' })).toMatchObject({ success: false, error: 'LOCKED_OBJECT' })
+  })
+
+  it('only advertises export scopes the editor can actually render', async () => {
+    const options = await run('get_export_options')
+    expect(options.scopes).toEqual(['full_mix', 'selection'])
+  })
+
+  it('does not mutate proposals after their lifecycle is complete', async () => {
+    const created = await run('create_tighten_proposal')
+    const proposalId = created.proposal.id
+    const actionId = created.proposal.actions[0].id
+    expect(await run('reject_proposal', { proposal_id: proposalId })).toMatchObject({ success: true })
+    expect(await run('reject_proposal_action', { proposal_id: proposalId, action_id: actionId })).toMatchObject({ success: false, error: 'PROPOSAL_NOT_PENDING' })
+    expect(await run('reject_proposal', { proposal_id: proposalId })).toMatchObject({ success: false, error: 'PROPOSAL_NOT_PENDING' })
   })
 })

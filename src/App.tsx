@@ -51,7 +51,6 @@ export default function App() {
   const webmcpStatus = useWavecraftStore((state) => state.webmcpStatus)
   const registeredToolCount = useWavecraftStore((state) => state.registeredToolCount)
   const fileInput = useRef<HTMLInputElement>(null)
-  const animationRef = useRef<number | null>(null)
   const [exporting, setExporting] = useState(false)
   const [showShortcuts, setShowShortcuts] = useState(false)
 
@@ -60,19 +59,12 @@ export default function App() {
   const stop = useCallback(() => {
     if (playback.status === 'playing') setPlayhead(Math.min(project.duration, audioEngine.currentTime()))
     audioEngine.stop(); setPlaybackStatus('stopped')
-    if (animationRef.current !== null) cancelAnimationFrame(animationRef.current)
   }, [playback.status, project.duration, setPlaybackStatus, setPlayhead])
 
   const play = useCallback(async () => {
     if (playback.status === 'playing') { stop(); return }
-    await audioEngine.play(project, playback.playhead >= project.duration ? 0 : playback.playhead, () => { setPlaybackStatus('stopped'); setPlayhead(0) })
+    await audioEngine.play(project, playback.playhead >= project.duration ? 0 : playback.playhead, () => { setPlaybackStatus('stopped'); setPlayhead(0) }, setPlayhead)
     setPlaybackStatus('playing')
-    const tick = () => {
-      const time = audioEngine.currentTime()
-      setPlayhead(time)
-      if (useWavecraftStore.getState().playback.status === 'playing') animationRef.current = requestAnimationFrame(tick)
-    }
-    animationRef.current = requestAnimationFrame(tick)
   }, [playback.playhead, playback.status, project, setPlaybackStatus, setPlayhead, stop])
 
   const deleteSelection = useCallback(() => {
@@ -175,7 +167,7 @@ export default function App() {
 
       <main className={`editor-main ${inspectorOpen ? '' : 'inspector-closed'}`}>
         <div className="workspace-column">
-          <div className="judge-strip"><div><span className="judge-label">JUDGE MODE</span><strong>Edit with your hands. Direct with language.</strong><small>Try with your agent:</small><code>“Inspect what I selected and tighten it without changing the locked region.”</code></div><button onClick={() => { const demo = createDemoProject(); ensureDemoSources(demo); replaceProject(demo); setSelection({ kind: 'range', start: 4.8, end: 43.2, trackIds: ['track_host', 'track_guest'] }); fitProject() }}><Sparkles size={14} />Reset demo project</button></div>
+          <div className="judge-strip"><div><span className="judge-label">JUDGE MODE</span><strong>Edit with your hands. Direct with language.</strong><small>Try with your agent:</small><code>“Inspect what I selected and tighten it without changing the locked region.”</code></div><button onClick={() => { const demo = createDemoProject(); ensureDemoSources(demo); replaceProject({ ...demo, analysis: analyzeProjectAudio(demo) }); setSelection({ kind: 'range', start: 4.8, end: 43.2, trackIds: ['track_host', 'track_guest'] }); fitProject() }}><Sparkles size={14} />Reset demo project</button></div>
           <Timeline />
           <BottomPanel />
         </div>

@@ -47,6 +47,23 @@ function assertClipUnlocked(project: Project, clipId: string) {
   }
 }
 
+function assertTrackUnlocked(project: Project, trackId: string) {
+  const track = findTrack(project, trackId)
+  const explicit = project.locks.find((lock) => lock.kind === 'track' && lock.targetId === trackId)
+  if (track.locked || explicit) {
+    throw new ProjectError('LOCKED_OBJECT', `Track ${track.name} is locked.`, { trackId, lockId: explicit?.id })
+  }
+}
+
+function assertRippleObjectsUnlocked(project: Project, start: number, end: number) {
+  for (const track of project.tracks) {
+    const affectedClips = track.clips.filter((clip) => overlaps(clip.timelineStart, clip.timelineStart + clip.duration, start, end))
+    if (!affectedClips.length) continue
+    assertTrackUnlocked(project, track.id)
+    for (const clip of affectedClips) assertClipUnlocked(project, clip.id)
+  }
+}
+
 function recalculateDuration(project: Project): number {
   const clipEnd = Math.max(0, ...project.tracks.flatMap((track) => track.clips.map((clip) => clip.timelineStart + clip.duration)))
   return round(Math.max(clipEnd, ...project.markers.map((marker) => marker.time), ...project.regions.map((region) => region.end)))
@@ -169,28 +186,29 @@ export function applyProjectAction(project: Project, action: ProjectAction, orig
     }
     case 'set_track_gain': {
       if (action.gainDb < -60 || action.gainDb > 24) throw new ProjectError('INVALID_GAIN', 'Track gain must be between -60 dB and +24 dB.', { gainDb: action.gainDb })
+      assertTrackUnlocked(project, action.trackId)
       const track = findTrack(next, action.trackId)
-      if (track.locked) throw new ProjectError('LOCKED_OBJECT', `Track ${track.name} is locked.`, { trackId: track.id })
       track.gainDb = round(action.gainDb)
       for (const clip of track.clips) if (origin === 'human') clip.manualRevision = revision
       break
     }
     case 'set_track_pan': {
       if (action.pan < -1 || action.pan > 1) throw new ProjectError('INVALID_PAN', 'Pan must be between -1 and 1.', { pan: action.pan })
+      assertTrackUnlocked(project, action.trackId)
       const track = findTrack(next, action.trackId)
-      if (track.locked) throw new ProjectError('LOCKED_OBJECT', `Track ${track.name} is locked.`, { trackId: track.id })
       track.pan = round(action.pan)
       break
     }
-    case 'toggle_track_mute': findTrack(next, action.trackId).muted = !findTrack(next, action.trackId).muted; break
-    case 'toggle_track_solo': findTrack(next, action.trackId).solo = !findTrack(next, action.trackId).solo; break
+    case 'toggle_track_mute': assertTrackUnlocked(project, action.trackId); findTrack(next, action.trackId).muted = !findTrack(next, action.trackId).muted; break
+    case 'toggle_track_solo': assertTrackUnlocked(project, action.trackId); findTrack(next, action.trackId).solo = !findTrack(next, action.trackId).solo; break
     case 'toggle_track_lock': findTrack(next, action.trackId).locked = !findTrack(next, action.trackId).locked; break
-    case 'rename_track': findTrack(next, action.trackId).name = action.name.trim() || findTrack(next, action.trackId).name; break
+    case 'rename_track': assertTrackUnlocked(project, action.trackId); findTrack(next, action.trackId).name = action.name.trim() || findTrack(next, action.trackId).name; break
     case 'ripple_delete_range': {
       validateTime(project, action.start, 'start')
       validateTime(project, action.end, 'end')
       if (action.end <= action.start) throw new ProjectError('INVALID_RANGE', 'Range end must be after range start.', { start: action.start, end: action.end })
       assertRangeUnlocked(project, action.start, action.end)
+      assertRippleObjectsUnlocked(project, action.start, action.end)
       const cutDuration = action.end - action.start
       next.tracks = next.tracks.map((track) => ({ ...track, clips: track.clips.flatMap((clip) => rippleClip(clip, action.start, action.end, revision)) }))
       next.markers = next.markers.filter((marker) => marker.time < action.start || marker.time > action.end).map((marker) => marker.time > action.end ? { ...marker, time: round(marker.time - cutDuration) } : marker)

@@ -26,6 +26,25 @@ describe('Wavecraft project actions', () => {
     }
   })
 
+  it('treats a locked track as a hard constraint for agent edits', () => {
+    const project = applyProjectAction(createDemoProject(), { type: 'toggle_track_lock', trackId: 'track_host' })
+    const actions = [
+      { type: 'ripple_delete_range', start: 7.4, end: 9.2 },
+      { type: 'toggle_track_mute', trackId: 'track_host' },
+      { type: 'toggle_track_solo', trackId: 'track_host' },
+      { type: 'rename_track', trackId: 'track_host', name: 'Changed through a lock' },
+    ] as const
+
+    for (const action of actions) {
+      expect(() => applyProjectAction(project, action, 'agent')).toThrowError(ProjectError)
+      try {
+        applyProjectAction(project, action, 'agent')
+      } catch (error) {
+        expect(error).toMatchObject({ code: 'LOCKED_OBJECT' })
+      }
+    }
+  })
+
   it('ripple-deletes media across tracks while preserving synchronization', () => {
     const project = createDemoProject()
     const next = applyProjectAction(project, { type: 'ripple_delete_range', start: 7.4, end: 9.2 })

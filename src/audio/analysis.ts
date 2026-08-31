@@ -43,11 +43,66 @@ function detectDialogueSilence(project: Project): SilenceRange[] {
   })
 }
 
+export interface ClippingRange {
+  start: number
+  end: number
+  trackId: string
+  peakDb: number
+  samples: number
+}
+
+export function analyzeTrackLevel(project: Project, track: Track) {
+  if (track.muted) return -120
+  let squareSum = 0
+  let sampleCount = 0
+  for (const clip of track.clips) {
+    const source = sourceRepository.get(clip.sourceId)
+    if (!source) continue
+    const gain = 10 ** ((track.gainDb + clip.gainDb) / 20)
+    const first = Math.floor(clip.sourceStart * source.sampleRate)
+    const last = Math.min(source.channels[0].length, Math.ceil((clip.sourceStart + clip.duration * clip.speed) * source.sampleRate))
+    for (let index = first; index < last; index += 8) {
+      const sample = source.channels[0][index] * gain
+      squareSum += sample * sample
+      sampleCount += 1
+    }
+  }
+  return Math.round(db(Math.sqrt(squareSum / Math.max(1, sampleCount))) * 10) / 10
+}
+
+export function detectProjectClipping(project: Project): ClippingRange[] {
+  const ranges: ClippingRange[] = []
+  for (const track of project.tracks) {
+    if (track.muted) continue
+    for (const clip of track.clips) {
+      const source = sourceRepository.get(clip.sourceId)
+      if (!source) continue
+      const gain = 10 ** ((track.gainDb + clip.gainDb) / 20)
+      const first = Math.floor(clip.sourceStart * source.sampleRate)
+      const last = Math.min(source.channels[0].length, Math.ceil((clip.sourceStart + clip.duration * clip.speed) * source.sampleRate))
+      let current: ClippingRange | null = null
+      for (let index = first; index < last; index += 8) {
+        const absolute = Math.abs(source.channels[0][index] * gain)
+        if (absolute < 0.999) continue
+        const time = clip.timelineStart + (index / source.sampleRate - clip.sourceStart) / clip.speed
+        if (!current || time - current.end > 0.02) {
+          current = { start: time, end: time + 8 / source.sampleRate, trackId: track.id, peakDb: db(absolute), samples: 8 }
+          ranges.push(current)
+        } else {
+          current.end = time + 8 / source.sampleRate
+          current.peakDb = Math.max(current.peakDb, db(absolute))
+          current.samples += 8
+        }
+      }
+    }
+  }
+  return ranges.sort((a, b) => a.start - b.start).map((range) => ({ ...range, start: Math.round(range.start * 1_000_000) / 1_000_000, end: Math.round(range.end * 1_000_000) / 1_000_000, peakDb: Math.round(range.peakDb * 10) / 10 }))
+}
+
 export function analyzeProjectAudio(project: Project): AnalysisSummary {
   let peak = 0
   let squareSum = 0
   let sampleCount = 0
-  let clippingCount = 0
   for (const track of project.tracks) {
     if (track.muted) continue
     const gain = 10 ** (track.gainDb / 20)
@@ -64,12 +119,12 @@ export function analyzeProjectAudio(project: Project): AnalysisSummary {
         peak = Math.max(peak, absolute)
         squareSum += sample * sample
         sampleCount += 1
-        if (absolute >= 0.999) clippingCount += 8
       }
     }
   }
   const rms = Math.sqrt(squareSum / Math.max(1, sampleCount))
   const silence = detectDialogueSilence(project)
+  const clippingCount = detectProjectClipping(project).reduce((sum, range) => sum + range.samples, 0)
   const removable = silence.filter((range) => range.kind === 'silence' && range.duration >= 1.5)
   const host = project.tracks.find((track) => track.id === 'track_host')
   const guest = project.tracks.find((track) => track.id === 'track_guest')

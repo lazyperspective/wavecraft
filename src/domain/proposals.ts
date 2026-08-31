@@ -43,16 +43,20 @@ export function createTightenProposal(project: Project, selection: Selection): E
   }
 }
 
-export function createBalanceProposal(project: Project): EditProposal {
+export function createBalanceProposal(project: Project, measuredLevels: Array<{ trackId: string; rmsDb: number }> = []): EditProposal {
   const host = project.tracks.find((track) => track.id === 'track_host')
   const guest = project.tracks.find((track) => track.id === 'track_guest')
   if (!host || !guest) throw new ProjectError('TRACKS_NOT_FOUND', 'Host and guest tracks are required for speaker balancing.')
+  const hostLevel = measuredLevels.find((level) => level.trackId === host.id)?.rmsDb ?? host.gainDb
+  const guestLevel = measuredLevels.find((level) => level.trackId === guest.id)?.rmsDb ?? guest.gainDb
+  const levelGap = hostLevel - guestLevel
+  const halfCorrection = Math.max(-3, Math.min(3, levelGap / 2))
   const guestManual = guest.clips.some((clip) => clip.manualRevision > 0)
   const actions: ProposalAction[] = guestManual
-    ? [{ id: `proposal_action_${project.revision + 1}_1`, action: { type: 'set_track_gain', trackId: host.id, gainDb: host.gainDb - 1.4 }, label: 'Lower host 1.4 dB around the human-set guest level', status: 'pending' }]
+    ? [{ id: `proposal_action_${project.revision + 1}_1`, action: { type: 'set_track_gain', trackId: host.id, gainDb: Math.round((host.gainDb - Math.max(-6, Math.min(6, levelGap))) * 10) / 10 }, label: `Adjust host ${Math.abs(levelGap).toFixed(1)} dB around the human-set guest level`, status: 'pending' }]
     : [
-        { id: `proposal_action_${project.revision + 1}_1`, action: { type: 'set_track_gain', trackId: host.id, gainDb: host.gainDb - 1.1 }, label: 'Lower host 1.1 dB', status: 'pending' },
-        { id: `proposal_action_${project.revision + 1}_2`, action: { type: 'set_track_gain', trackId: guest.id, gainDb: guest.gainDb + 3.2 }, label: 'Raise guest 3.2 dB', status: 'pending' },
+        { id: `proposal_action_${project.revision + 1}_1`, action: { type: 'set_track_gain', trackId: host.id, gainDb: Math.round((host.gainDb - halfCorrection) * 10) / 10 }, label: `${halfCorrection >= 0 ? 'Lower' : 'Raise'} host ${Math.abs(halfCorrection).toFixed(1)} dB`, status: 'pending' },
+        { id: `proposal_action_${project.revision + 1}_2`, action: { type: 'set_track_gain', trackId: guest.id, gainDb: Math.round((guest.gainDb + halfCorrection) * 10) / 10 }, label: `${halfCorrection >= 0 ? 'Raise' : 'Lower'} guest ${Math.abs(halfCorrection).toFixed(1)} dB`, status: 'pending' },
       ]
   return {
     id: `proposal_balance_${project.revision + 1}`,
@@ -60,6 +64,6 @@ export function createBalanceProposal(project: Project): EditProposal {
     description: guestManual ? 'Preserve the human-set guest level and rebalance the host around it.' : 'Narrow the speaker loudness gap without compressing either performance.',
     createdAt: new Date().toISOString(),
     status: 'pending', originalDuration: project.duration, proposedDuration: project.duration, actions,
-    rationale: [guestManual ? 'Guest level has a manual override and remains authoritative.' : 'Guest averages 5.4 dB below host.', 'Gain-only changes preserve natural dynamics.'],
+    rationale: [guestManual ? 'Guest level has a manual override and remains authoritative.' : `Measured dialogue RMS differs by ${Math.abs(levelGap).toFixed(1)} dB.`, 'Gain-only changes preserve natural dynamics.'],
   }
 }

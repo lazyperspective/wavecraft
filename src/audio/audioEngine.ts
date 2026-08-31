@@ -15,7 +15,10 @@ class AudioEngine {
   private buffers = new Map<string, AudioBuffer>()
   private startedAt = 0
   private projectOffset = 0
+  private projectEnd = 0
+  private playing = false
   private endTimer: number | null = null
+  private progressFrame: number | null = null
   private onEnded: (() => void) | null = null
 
   private getContext() {
@@ -34,13 +37,15 @@ class AudioEngine {
     return buffer
   }
 
-  async play(project: Project, from: number, onEnded: () => void) {
+  async play(project: Project, from: number, onEnded: () => void, onTimeUpdate?: (time: number) => void) {
     this.stop()
     const context = this.getContext()
     await context.resume()
     const soloed = project.tracks.some((track) => track.solo)
     this.projectOffset = from
+    this.projectEnd = project.duration
     this.startedAt = context.currentTime
+    this.playing = true
     this.onEnded = onEnded
     for (const track of project.tracks) {
       if (track.muted || (soloed && !track.solo)) continue
@@ -76,11 +81,20 @@ class AudioEngine {
         }
       }
     }
+    if (onTimeUpdate) {
+      const tick = () => {
+        if (!this.playing) return
+        onTimeUpdate(this.currentTime())
+        this.progressFrame = window.requestAnimationFrame(tick)
+      }
+      this.progressFrame = window.requestAnimationFrame(tick)
+    }
     const remaining = Math.max(0, project.duration - from)
     this.endTimer = window.setTimeout(() => { this.stop(); onEnded() }, remaining * 1000 + 80)
   }
 
   stop() {
+    this.playing = false
     for (const node of this.nodes) {
       try { node.source.stop() } catch { /* already stopped */ }
       node.source.disconnect(); node.gain.disconnect(); node.pan.disconnect()
@@ -88,12 +102,14 @@ class AudioEngine {
     this.nodes = []
     if (this.endTimer !== null) window.clearTimeout(this.endTimer)
     this.endTimer = null
+    if (this.progressFrame !== null) window.cancelAnimationFrame(this.progressFrame)
+    this.progressFrame = null
     this.onEnded = null
   }
 
   currentTime() {
-    if (!this.context || !this.nodes.length) return this.projectOffset
-    return this.projectOffset + (this.context.currentTime - this.startedAt)
+    if (!this.context || !this.playing) return this.projectOffset
+    return Math.min(this.projectEnd, this.projectOffset + (this.context.currentTime - this.startedAt))
   }
 }
 

@@ -4,7 +4,8 @@ import { actionAffectedIds, applyProjectAction } from '../domain/projectActions'
 import { createBalanceProposal, createTightenProposal } from '../domain/proposals'
 import { ProjectError, type EditProposal, type PlaybackState, type Project, type ProjectAction, type Selection, type TimelineView, type ToolCallRecord } from '../domain/types'
 import { ensureDemoSources, sourceRepository, type PCMSource } from '../audio/sourceRepository'
-import { analyzeProjectAudio } from '../audio/analysis'
+import { analyzeProjectAudio, analyzeTrackLevel } from '../audio/analysis'
+import { audioEngine } from '../audio/audioEngine'
 
 interface DispatchOptions {
   origin?: 'human' | 'agent'
@@ -108,6 +109,7 @@ export const useWavecraftStore = create<WavecraftState>((set, get) => ({
     set({ project: { ...project, analysis: analyzeProjectAudio(project) }, demoReady: true, lastError: null })
   },
   replaceProject: (project) => {
+    audioEngine.stop()
     persist(project)
     set({ project, historyPast: [], historyFuture: [], selection: { kind: 'none' }, playback: { status: 'stopped', playhead: 0, loop: null }, view: { start: 0, end: Math.max(project.duration, 1), pixelsPerSecond: 24 } })
   },
@@ -116,6 +118,7 @@ export const useWavecraftStore = create<WavecraftState>((set, get) => ({
     const state = get()
     try {
       const project = applyProjectAction(state.project, action, options.origin ?? 'human')
+      project.analysis = analyzeProjectAudio(project)
       if (options.origin === 'agent') {
         project.agentChanges.push({
           id: `change_${project.revision}_${project.agentChanges.length + 1}`,
@@ -174,19 +177,31 @@ export const useWavecraftStore = create<WavecraftState>((set, get) => ({
     return proposal
   },
   proposeTighten: () => get().addProposal(createTightenProposal(get().project, get().selection)),
-  proposeBalance: () => get().addProposal(createBalanceProposal(get().project)),
-  setProposalActionStatus: (proposalId, actionId, status) => set((state) => ({
-    project: { ...state.project, proposals: state.project.proposals.map((proposal) => proposal.id === proposalId ? { ...proposal, actions: proposal.actions.map((action) => action.id === actionId ? { ...action, status } : action) } : proposal) },
-  })),
+  proposeBalance: () => {
+    const project = get().project
+    const levels = project.tracks.filter((track) => track.role === 'dialogue').map((track) => ({ trackId: track.id, rmsDb: analyzeTrackLevel(project, track) }))
+    return get().addProposal(createBalanceProposal(project, levels))
+  },
+  setProposalActionStatus: (proposalId, actionId, status) => {
+    const state = get()
+    const proposal = state.project.proposals.find((candidate) => candidate.id === proposalId)
+    if (!proposal) throw new ProjectError('PROPOSAL_NOT_FOUND', `Proposal ${proposalId} does not exist.`, { proposalId })
+    if (proposal.status !== 'pending') throw new ProjectError('PROPOSAL_NOT_PENDING', `Proposal ${proposalId} is ${proposal.status}.`, { proposalId, status: proposal.status })
+    if (!proposal.actions.some((action) => action.id === actionId)) throw new ProjectError('PROPOSAL_ACTION_NOT_FOUND', `Action ${actionId} does not exist in proposal ${proposalId}.`, { proposalId, actionId })
+    const project = { ...state.project, proposals: state.project.proposals.map((item) => item.id === proposalId ? { ...item, actions: item.actions.map((action) => action.id === actionId ? { ...action, status } : action) } : item), updatedAt: new Date().toISOString() }
+    persist(project)
+    set({ project, lastError: null })
+  },
   applyProposal: (proposalId) => {
     const state = get()
     const proposal = state.project.proposals.find((candidate) => candidate.id === proposalId)
     if (!proposal) throw new ProjectError('PROPOSAL_NOT_FOUND', `Proposal ${proposalId} does not exist.`, { proposalId })
     if (proposal.status !== 'pending') throw new ProjectError('PROPOSAL_NOT_PENDING', `Proposal ${proposalId} is ${proposal.status}.`, { proposalId, status: proposal.status })
     const applicable = proposal.actions.filter((action) => action.status !== 'rejected')
-    let project = state.project
+    let project = structuredClone(state.project)
     try {
       for (const item of applicable) project = applyProjectAction(project, item.action, 'agent')
+      project.analysis = analyzeProjectAudio(project)
       project.proposals = project.proposals.map((item) => item.id === proposalId ? { ...item, status: 'applied', actions: item.actions.map((action) => action.status === 'rejected' ? action : { ...action, status: 'accepted' }) } : item)
       project.agentChanges.push({ id: `change_proposal_${project.revision}`, timestamp: new Date().toISOString(), tool: 'apply_proposal', explanation: proposal.title, affectedIds: applicable.flatMap((item) => actionAffectedIds(item.action)), reversible: true, proposalId })
       persist(project)
@@ -201,7 +216,15 @@ export const useWavecraftStore = create<WavecraftState>((set, get) => ({
       throw projectError
     }
   },
-  rejectProposal: (proposalId) => set((state) => ({ project: { ...state.project, proposals: state.project.proposals.map((proposal) => proposal.id === proposalId ? { ...proposal, status: 'rejected' } : proposal) } })),
+  rejectProposal: (proposalId) => {
+    const state = get()
+    const proposal = state.project.proposals.find((candidate) => candidate.id === proposalId)
+    if (!proposal) throw new ProjectError('PROPOSAL_NOT_FOUND', `Proposal ${proposalId} does not exist.`, { proposalId })
+    if (proposal.status !== 'pending') throw new ProjectError('PROPOSAL_NOT_PENDING', `Proposal ${proposalId} is ${proposal.status}.`, { proposalId, status: proposal.status })
+    const project = { ...state.project, proposals: state.project.proposals.map((item) => item.id === proposalId ? { ...item, status: 'rejected' as const } : item), updatedAt: new Date().toISOString() }
+    persist(project)
+    set({ project, lastError: null })
+  },
   setWebMCPStatus: (webmcpStatus, registeredToolCount = get().registeredToolCount) => set({ webmcpStatus, registeredToolCount }),
   recordToolCall: (record) => set((state) => ({ recentToolCalls: [{ ...record, id: `call_${Date.now()}`, timestamp: new Date().toISOString() }, ...state.recentToolCalls].slice(0, 12) })),
   clearError: () => set({ lastError: null }),
