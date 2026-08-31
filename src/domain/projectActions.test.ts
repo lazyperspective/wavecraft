@@ -64,7 +64,16 @@ describe('Wavecraft project actions', () => {
     const proposal = createBalanceProposal(humanEdited)
     expect(proposal.actions).toHaveLength(1)
     expect(proposal.actions[0].action).toMatchObject({ type: 'set_track_gain', trackId: 'track_host' })
-    expect(proposal.description).toContain('human-set guest level')
+    expect(proposal.description).toContain('human-constrained Guest')
+  })
+
+  it('preserves a manual host gain when proposing speaker balance', () => {
+    const project = createDemoProject()
+    const humanEdited = applyProjectAction(project, { type: 'set_track_gain', trackId: 'track_host', gainDb: -2 }, 'human')
+    const proposal = createBalanceProposal(humanEdited)
+    expect(proposal.actions).toHaveLength(1)
+    expect(proposal.actions[0].action).toMatchObject({ type: 'set_track_gain', trackId: 'track_guest' })
+    expect(proposal.description).toContain('human-constrained Host')
   })
 
   it('trims and fades clips non-destructively', () => {

@@ -82,9 +82,17 @@ describe('external agent acceptance workflow', () => {
   it('preserves a human gain override when proposing speaker balance', async () => {
     useWavecraftStore.getState().dispatch({ type: 'set_track_gain', trackId: 'track_guest', gainDb: -1.5 })
     const proposal = await run('create_balance_proposal')
-    expect(proposal.proposal.description).toContain('human-set guest level')
+    expect(proposal.proposal.description).toContain('human-constrained Guest')
     expect(proposal.proposal.actions).toHaveLength(1)
     expect(proposal.proposal.actions[0].action).toMatchObject({ type: 'set_track_gain', trackId: 'track_host' })
+  })
+
+  it('builds balance proposals around locked tracks instead of suggesting unsafe actions', async () => {
+    await run('lock_track', { track_id: 'track_host' })
+    const proposal = await run('create_balance_proposal')
+    expect(proposal.success).toBe(true)
+    expect(proposal.proposal.actions).toHaveLength(1)
+    expect(proposal.proposal.actions[0].action).toMatchObject({ type: 'set_track_gain', trackId: 'track_guest' })
   })
 
   it('rejects every agent mutation of a locked track', async () => {
