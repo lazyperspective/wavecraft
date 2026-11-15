@@ -1,0 +1,1267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Glass &amp; Brass</title>
+<style>
+  html,body{margin:0;height:100%;background:#080605;overflow:hidden;cursor:default}
+  canvas{display:block}
+  #veil{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;
+    padding-bottom:8vh;pointer-events:none;transition:opacity 2.4s ease;
+    font-family:"Cormorant Garamond","Iowan Old Style","Palatino Linotype",Palatino,"Book Antiqua",Georgia,serif;color:#eadbc3}
+  #veil h1{font-weight:400;font-size:clamp(18px,2.1vw,30px);letter-spacing:.5em;margin:0 0 1.1em;padding-left:.5em;
+    text-transform:uppercase;opacity:0;animation:rise 3s 0.8s ease forwards}
+  #veil p{margin:0;font-size:clamp(11px,.95vw,14px);letter-spacing:.34em;padding-left:.34em;font-style:italic;opacity:0;
+    animation:rise 3s 1.8s ease forwards, breathe 4s 4.8s ease-in-out infinite}
+  @keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:.8;transform:none}}
+  @keyframes breathe{0%,100%{opacity:.8}50%{opacity:.3}}
+  #veil.gone{opacity:0}
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<script>window.__clicked=false;addEventListener("pointerdown",function(){window.__clicked=true},{once:true});</script>
+<div id="veil"><h1>Glass &amp; Brass</h1><p>click to listen</p></div>
+<script type="module">
+import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+
+const V3 = THREE.Vector3;
+const TAU = Math.PI * 2, D2R = Math.PI / 180;
+const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
+const lerp = (a, b, t) => a + (b - a) * t;
+const sstep = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+const smooth = t => t * t * (3 - 2 * t);
+const polar = (r, phi, y) => new V3(r * Math.cos(phi), y, r * Math.sin(phi));
+
+/* =====================================================================
+   PHYSICAL CONSTANTS & MACHINE DIMENSIONS
+   ===================================================================== */
+const G = 9.8, K = 5 / 7, DT = 1 / 360;          // gravity, rolling-sphere factor, sim step
+const RM = 0.062;                                 // marble radius
+const RAIL_W = 0.040, RAIL_R = 0.0085;            // half rail gap, rail radius
+const HC = Math.sqrt((RM + RAIL_R) ** 2 - RAIL_W ** 2); // marble centre above rail line
+const MU = 0.011, CD = 0.032;                     // rolling resistance, air/rail drag
+const N_ARMS = 11, CAP = 5;
+const RING_R = 0.52, LIFT_R = 0.10, R_GATE = 0.95, R_LIP = 1.30;
+const Y_EXIT = 3.20, Y_LOAD = 0.04;
+const YC = 3.20 - 3.50;
+const LEAD = 0.5, STARTS = 3, OMEGA = TAU * 1.1;
+const A0 = -Math.PI / 2;
+const THETA_G = A0 - 55 * D2R;                    // lift guide angle
+const PHI_F = 55 * D2R, PHI_R = 88 * D2R;
+const ARM_SP = TAU / N_ARMS;
+const armAngle = k => A0 + 15 * D2R + k * ARM_SP;
+const R_HOLE = 0.36, R_RIM = 2.30, Y_HOLE = 0.36, Y_RIM = 0.80;
+const BOWL_C = (Y_RIM - Y_HOLE) / (1 / R_HOLE - 1 / R_RIM);
+const bowlY = r => Y_RIM - BOWL_C * (1 / r - 1 / R_RIM);
+const bowlD = r => BOWL_C / (r * r);
+const bowlDD = r => -2 * BOWL_C / (r * r * r);
+const E_BAR = 0.52, E_BOWL = 0.32;
+const BAR_TH = 0.04;
+
+/* =====================================================================
+   MUSIC
+   ===================================================================== */
+const NOTE_NAMES = ['C3', 'F3', 'G3', 'C4', 'D4', 'E4', 'F4', 'G4', 'A4', 'B4', 'C5'];
+const MIDI = [48, 53, 55, 60, 62, 64, 65, 67, 69, 71, 72];
+const FREQ = MIDI.map(m => 440 * Math.pow(2, (m - 69) / 12));
+const IDX = Object.fromEntries(NOTE_NAMES.map((n, i) => [n, i]));
+// Brahms, Wiegenlied (Op. 49 No. 4), in C, 3/4 — [note, beats]
+const MEL = [
+  ['E4', .5], ['E4', .5],
+  ['G4', 1.5], ['E4', .5], ['E4', 1],
+  ['G4', 2], ['E4', .5], ['G4', .5],
+  ['C5', 1], ['B4', 1.5], ['A4', .5],
+  ['A4', 1], ['G4', 1], ['D4', .5], ['E4', .5],
+  ['F4', 1], ['D4', 1], ['D4', .5], ['E4', .5],
+  ['F4', 2], ['D4', .5], ['F4', .5],
+  ['B4', .5], ['A4', .5], ['G4', 1], ['B4', 1],
+  ['C5', 2], ['C4', .5], ['C4', .5],
+  ['C5', 2], ['A4', .5], ['F4', .5],
+  ['G4', 2], ['E4', .5], ['C4', .5],
+  ['F4', 1], ['G4', 1], ['A4', 1],
+  ['G4', 2], ['C4', .5], ['C4', .5],
+  ['C5', 2], ['A4', .5], ['F4', .5],
+  ['G4', 2], ['E4', .5], ['C4', .5],
+  ['F4', 1], ['E4', 1], ['D4', 1],
+  ['C4', 3],
+];
+const CHORDS = ['C', 'C', 'C', 'G', 'G', 'G', 'G', 'C', 'F', 'C', 'F', 'C', 'F', 'C', 'G', 'C'];
+const BASS = { C: 'C3', F: 'F3', G: 'G3' };
+const TONES = { C: ['C4', 'E4', 'G4'], F: ['C4', 'F4', 'A4'], G: ['D4', 'F4', 'G4', 'B4'] };
+const SPB = 60 / 66;
+
+function buildPass(p, t0) {
+  const ev = [];
+  const total = 49;
+  const spb = b => SPB * (1 + 0.32 * sstep(41, 49, b) + 0.06 * sstep(0, -1, b));
+  const tab = []; let acc = 0;
+  for (let i = 0; i <= (total + 2) * 100; i++) { tab.push(acc); acc += spb(i / 100) / 100; }
+  const bt = b => t0 + tab[Math.round(b * 100)];
+  const withHarm = p % 2 === 1;
+  let b = 0;
+  for (const [nm, d] of MEL) {
+    const meas = b < 1 ? 0 : Math.floor((b - 1) / 3) + 1;
+    const bim = b < 1 ? -1 : (b - 1) % 3;
+    const phrase = Math.sin(Math.PI * (((b - 1) % 24 + 24) % 24) / 24);
+    let g = 0.70 + 0.12 * phrase + (bim === 0 ? 0.10 : 0) + (d >= 1.5 ? 0.04 : 0) - (d <= 0.5 && bim !== 0 ? 0.05 : 0);
+    if (withHarm) g *= 0.94;
+    ev.push({ t: bt(b), bar: IDX[nm], gain: g });
+    if (withHarm && d >= 1 && meas >= 1) {
+      const ch = CHORDS[meas - 1]; const mm = MIDI[IDX[nm]];
+      const cand = TONES[ch].filter(n => MIDI[IDX[n]] <= mm - 3);
+      if (cand.length) ev.push({ t: bt(b) + 0.012, bar: IDX[cand[cand.length - 1]], gain: 0.40 + 0.06 * phrase });
+    }
+    b += d;
+  }
+  for (let m = 1; m <= 16; m++) ev.push({ t: bt(1 + 3 * (m - 1)) - 0.004, bar: IDX[BASS[CHORDS[m - 1]]], gain: m === 16 ? 0.62 : 0.5 });
+  // a rolled chord to close
+  ev.push({ t: bt(46) + 0.11, bar: IDX['E4'], gain: 0.34 });
+  ev.push({ t: bt(46) + 0.23, bar: IDX['G4'], gain: 0.30 });
+  if (withHarm) ev.push({ t: bt(46) + 0.36, bar: IDX['C5'], gain: 0.28 });
+  ev.sort((a, b2) => a.t - b2.t);
+  return { ev, tEnd: bt(total) + SPB * 1.6 };
+}
+
+/* =====================================================================
+   TRACKS: dense arc-length sampled centre lines for the marble
+   ===================================================================== */
+class Track {
+  constructor(pts) {
+    const n = pts.length, cum = new Float64Array(n);
+    for (let i = 1; i < n; i++) cum[i] = cum[i - 1] + pts[i].distanceTo(pts[i - 1]);
+    const L = cum[n - 1], N = Math.max(2, Math.ceil(L / 0.004) + 1), ds = L / (N - 1);
+    this.L = L; this.N = N; this.ds = ds;
+    const P = this.P = new Float64Array(N * 3);
+    let j = 0;
+    for (let i = 0; i < N; i++) {
+      const s = i * ds;
+      while (j < n - 2 && cum[j + 1] < s) j++;
+      const f = clamp((s - cum[j]) / ((cum[j + 1] - cum[j]) || 1), 0, 1);
+      const a = pts[j], b = pts[j + 1];
+      P[3 * i] = a.x + (b.x - a.x) * f; P[3 * i + 1] = a.y + (b.y - a.y) * f; P[3 * i + 2] = a.z + (b.z - a.z) * f;
+    }
+    const T = this.T = new Float64Array(N * 3);
+    for (let i = 0; i < N; i++) {
+      const i0 = Math.max(0, i - 1), i1 = Math.min(N - 1, i + 1);
+      let x = P[3 * i1] - P[3 * i0], y = P[3 * i1 + 1] - P[3 * i0 + 1], z = P[3 * i1 + 2] - P[3 * i0 + 2];
+      const l = Math.hypot(x, y, z) || 1; T[3 * i] = x / l; T[3 * i + 1] = y / l; T[3 * i + 2] = z / l;
+    }
+    this.Nn = new Float64Array(N * 3); this.B = new Float64Array(N * 3);
+  }
+  _ix(s) { let x = s / this.ds; if (x < 0) x = 0; if (x > this.N - 1.000001) x = this.N - 1.000001; const i = x | 0; return [i, x - i]; }
+  ty(s) { const [i, f] = this._ix(s); return this.T[3 * i + 1] * (1 - f) + this.T[3 * i + 4] * f; }
+  pos(s, out) { const [i, f] = this._ix(s), P = this.P, k = 3 * i; return out.set(P[k] + (P[k + 3] - P[k]) * f, P[k + 1] + (P[k + 4] - P[k + 1]) * f, P[k + 2] + (P[k + 5] - P[k + 2]) * f); }
+  vec(arr, s, out) { const [i, f] = this._ix(s), k = 3 * i; return out.set(arr[k] + (arr[k + 3] - arr[k]) * f, arr[k + 1] + (arr[k + 4] - arr[k + 1]) * f, arr[k + 2] + (arr[k + 5] - arr[k + 2]) * f); }
+  // speed profile -> banked frames
+  frames(v0) {
+    const { N, ds, T, P } = this, V = new Float64Array(N);
+    let v = v0;
+    for (let i = 0; i < N; i++) { V[i] = v; const a = -G * K * T[3 * i + 1] - MU * G - CD * v * v; v = Math.sqrt(Math.max(0.0004, v * v + 2 * a * ds)); }
+    this.V = V;
+    const U = new Float64Array(N * 3);
+    for (let i = 0; i < N; i++) {
+      const i0 = Math.max(0, i - 2), i1 = Math.min(N - 1, i + 2), h = (i1 - i0) * ds;
+      const kx = (T[3 * i1] - T[3 * i0]) / h, kz = (T[3 * i1 + 2] - T[3 * i0 + 2]) / h;
+      const kh = Math.hypot(kx, kz);
+      const b = Math.min(1.05, Math.atan2(V[i] * V[i] * kh, G));
+      const sx = kh > 1e-6 ? kx / kh : 0, sz = kh > 1e-6 ? kz / kh : 0;
+      U[3 * i] = Math.sin(b) * sx; U[3 * i + 1] = Math.cos(b); U[3 * i + 2] = Math.sin(b) * sz;
+    }
+    const W = 18, Nn = this.Nn, B = this.B;
+    for (let i = 0; i < N; i++) {
+      let x = 0, y = 0, z = 0;
+      for (let j = Math.max(0, i - W); j <= Math.min(N - 1, i + W); j++) { x += U[3 * j]; y += U[3 * j + 1]; z += U[3 * j + 2]; }
+      const tx = T[3 * i], ty = T[3 * i + 1], tz = T[3 * i + 2];
+      const d = x * tx + y * ty + z * tz; x -= d * tx; y -= d * ty; z -= d * tz;
+      const l = Math.hypot(x, y, z); x /= l; y /= l; z /= l;
+      Nn[3 * i] = x; Nn[3 * i + 1] = y; Nn[3 * i + 2] = z;
+      B[3 * i] = ty * z - tz * y; B[3 * i + 1] = tz * x - tx * z; B[3 * i + 2] = tx * y - ty * x;
+    }
+    return this;
+  }
+}
+
+// --- generate the machine's centre lines -------------------------------
+const CHUTE_SLOPE = 6 * D2R, RING_SLOPE = 3.0 * D2R;
+function polyY(plan, y0, slopeFn) {
+  // plan: array of {x,z}; integrates y along horizontal distance with slope angle slopeFn(w)
+  let tot = 0; const cum = [0];
+  for (let i = 1; i < plan.length; i++) { tot += Math.hypot(plan[i].x - plan[i - 1].x, plan[i].z - plan[i - 1].z); cum.push(tot); }
+  const out = []; let y = y0;
+  for (let i = 0; i < plan.length; i++) {
+    if (i > 0) { const w = (cum[i] + cum[i - 1]) * 0.5 / tot; y -= Math.tan(slopeFn(w, tot)) * (cum[i] - cum[i - 1]); }
+    out.push(new V3(plan[i].x, y, plan[i].z));
+  }
+  return out;
+}
+const chutePts = (() => {
+  const plan = []; for (let i = 0; i <= 90; i++) { const u = i / 90; const phi = THETA_G + (A0 - THETA_G) * u * u; const r = LIFT_R + (RING_R - LIFT_R) * (1 - (1 - u) ** 2); plan.push(polar(r, phi, 0)); }
+  return polyY(plan, Y_EXIT, () => CHUTE_SLOPE);
+})();
+const Y_RING0 = chutePts[chutePts.length - 1].y;
+const ringY = phi => Y_RING0 - Math.tan(RING_SLOPE) * RING_R * (phi - A0);
+const GATE_Y = ringY(armAngle(N_ARMS - 1)) - 0.15;
+function ringPts(phi1) { const pts = []; const n = Math.max(2, Math.ceil((phi1 - A0) / (1.5 * D2R))); for (let i = 1; i <= n; i++) { const phi = A0 + (phi1 - A0) * i / n; pts.push(polar(RING_R, phi, ringY(phi))); } return pts; }
+function feederPts(k) {
+  const b = armAngle(k), plan = [];
+  for (let i = 0; i <= 120; i++) { const u = i / 120; plan.push(polar(RING_R + (R_GATE - RING_R) * smooth(u), b + PHI_F * u, 0)); }
+  let Lp = 0; for (let i = 1; i < plan.length; i++) Lp += Math.hypot(plan[i].x - plan[i - 1].x, plan[i].z - plan[i - 1].z);
+  const D = ringY(b) - GATE_Y, sE = Math.tan(20 * D2R) * Lp;
+  const c1 = 2 * D - sE, c2 = sE - D;
+  return polyY(plan, ringY(b), w => Math.atan((c1 + 2 * c2 * w) / Lp));
+}
+const TH_MAX = 47 * D2R, TH_UP = 11 * D2R;
+function rampPts(k) {
+  const b = armAngle(k) + PHI_F, plan = [];
+  for (let i = 0; i <= 400; i++) { const u = i / 400; plan.push(polar(R_GATE + (R_LIP - R_GATE) * smooth(u), b + PHI_R * u, 0)); }
+  return polyY(plan, GATE_Y, w => 20 * D2R + (TH_MAX - 20 * D2R) * sstep(0, 0.17, w) - (TH_MAX + TH_UP) * sstep(0.40, 1.0, w));
+}
+const deliver = [], ramps = [], junctionS = [];
+for (let k = 0; k < N_ARMS; k++) {
+  const ring = ringPts(armAngle(k));
+  const pre = [...chutePts, ...ring];
+  let jl = 0; for (let i = 1; i < pre.length; i++) jl += pre[i].distanceTo(pre[i - 1]);
+  junctionS.push(jl);
+  const fp = feederPts(k); fp.shift();
+  deliver.push(new Track([...pre, ...fp]).frames(0.45));
+  ramps.push(new Track(rampPts(k)).frames(0.0));
+}
+
+/* =====================================================================
+   SIMULATION STATE
+   ===================================================================== */
+const bars = [];          // tuned bars (filled after placement)
+const posts = [];         // bowl obstacles {x,z,r}
+const queues = Array.from({ length: N_ARMS }, () => []);
+const marbles = [];
+const buffer = [];
+const liftList = [];
+const sim = { n: 0, t: 0, running: false, liftA: 0, slot: 0, liftW: 0 };
+const stats = { starved: 0, strikes: 0, maxErr: 0, released: 0, late: [] };
+const fx = [];            // incidental sound events produced by sim
+let strikeHook = null;
+const _v = new V3(), _v2 = new V3();
+
+function stepTrack(m, t) {
+  const tr = m.track;
+  let a = -G * K * tr.ty(m.s) - CD * m.v * Math.abs(m.v);
+  const fr = MU * G;
+  if (Math.abs(m.v) > 1e-4) a -= fr * Math.sign(m.v);
+  else if (Math.abs(a) <= fr) a = 0; else a -= fr * Math.sign(a);
+  m.v += a * DT; m.s += m.v * DT;
+  if (m.kind === 0) { // delivery with queue stop
+    const stop = tr.L - 2 * RM * m.qi;
+    if (m.s >= stop) {
+      m.s = stop;
+      if (m.v > 0.12) fx.push({ type: 'clack', v: m.v, track: tr, s: stop });
+      m.v = -m.v * 0.28; if (Math.abs(m.v) < 0.03) m.v = 0;
+    }
+  } else if (m.s >= tr.L) {
+    tr.pos(tr.L, m.pos); tr.vec(tr.T, tr.L, m.vel).multiplyScalar(m.v);
+    m.mode = 'air';
+    m.spinAxis.copy(tr.vec(tr.Nn, tr.L, _v)).cross(tr.vec(tr.T, tr.L, _v2)).normalize();
+    m.spinRate = m.v / RM;
+    return;
+  }
+  if (m.s < 0) { m.s = 0; if (m.v < 0) m.v = 0; }
+}
+
+function stepAir(m, t) {
+  const px = m.pos.x, py = m.pos.y, pz = m.pos.z;
+  m.vel.y -= G * DT;
+  m.pos.x += m.vel.x * DT; m.pos.y += m.vel.y * DT; m.pos.z += m.vel.z * DT;
+  if (m.bar >= 0 && !m.struck) {
+    const b = bars[m.bar];
+    const d0 = b.n.x * (px - b.c.x) + b.n.y * (py - b.c.y) + b.n.z * (pz - b.c.z);
+    const d1 = b.n.x * (m.pos.x - b.c.x) + b.n.y * (m.pos.y - b.c.y) + b.n.z * (m.pos.z - b.c.z);
+    if (d1 <= RM && d0 > RM) {
+      const f = (d0 - RM) / (d0 - d1);
+      const hx = px + (m.pos.x - px) * f, hy = py + (m.pos.y - py) * f, hz = pz + (m.pos.z - pz) * f;
+      const la = (hx - b.c.x) * b.a.x + (hy - b.c.y) * b.a.y + (hz - b.c.z) * b.a.z;
+      const lw = (hx - b.c.x) * b.w.x + (hy - b.c.y) * b.w.y + (hz - b.c.z) * b.w.z;
+      if (Math.abs(la) < b.halfL + RM * 0.3 && Math.abs(lw) < b.halfW + RM * 0.6) {
+        const vn = m.vel.dot(b.n);
+        m.vel.addScaledVector(b.n, -vn);           // tangential part
+        m.vel.multiplyScalar(0.9);
+        m.vel.addScaledVector(b.n, -vn * E_BAR);   // reflected normal part
+        m.pos.set(hx, hy, hz).addScaledVector(m.vel, (1 - f) * DT);
+        m.struck = true;
+        const th = t + f * DT;
+        stats.strikes++;
+        if (m.expect !== undefined) stats.maxErr = Math.max(stats.maxErr, Math.abs(th - m.expect));
+        if (strikeHook) strikeHook(m.bar, th, -vn, m.noteGain || 0.7);
+        m.lastHit = { t: th, vn: -vn };
+        m.spinRate *= 0.7;
+      }
+    }
+  }
+  const r = Math.hypot(m.pos.x, m.pos.z);
+  if (r > R_HOLE && r < R_RIM - RM * 0.5) {
+    const hp = bowlD(r), sy = bowlY(r) + RM * Math.sqrt(1 + hp * hp);
+    if (m.pos.y <= sy) {
+      let nx = -hp * m.pos.x / r, ny = 1, nz = -hp * m.pos.z / r; const l = Math.hypot(nx, ny, nz); nx /= l; ny /= l; nz /= l;
+      const vn = m.vel.x * nx + m.vel.y * ny + m.vel.z * nz;
+      m.pos.y = sy;
+      if (vn < -0.75) {
+        const k = -(1 + E_BOWL) * vn; m.vel.x += k * nx; m.vel.y += k * ny; m.vel.z += k * nz;
+        m.vel.multiplyScalar(0.92);
+        fx.push({ type: 'tock', v: -vn, x: m.pos.x, y: m.pos.y, z: m.pos.z });
+      } else {
+        m.vel.x -= vn * nx; m.vel.z -= vn * nz;
+        m.mode = 'bowl';
+        if (vn < -0.12) fx.push({ type: 'tock', v: -vn, x: m.pos.x, y: m.pos.y, z: m.pos.z });
+      }
+    }
+  } else if (r <= R_HOLE && m.pos.y < Y_HOLE + 0.05) {
+    m.mode = 'drop';
+  }
+  if (m.pos.y < -0.5) toBuffer(m);
+}
+
+const BOWL_DRAG = 0.16, BOWL_MU = 0.012;
+function stepBowl(m) {
+  const x = m.pos.x, z = m.pos.z, r = Math.hypot(x, z), rx = x / r, rz = z / r;
+  const hp = bowlD(r), hpp = bowlDD(r);
+  const vr = m.vel.x * rx + m.vel.z * rz, v2 = m.vel.x * m.vel.x + m.vel.z * m.vel.z, vt2 = Math.max(0, v2 - vr * vr);
+  const num = G * K + hpp * vr * vr + (hp / r) * vt2;
+  const ar = -num * hp / (1 + hp * hp);
+  const sp = Math.sqrt(v2) || 1e-6;
+  const drag = BOWL_DRAG + BOWL_MU * G / Math.max(sp, 0.08);
+  m.vel.x += (ar * rx - drag * m.vel.x) * DT;
+  m.vel.z += (ar * rz - drag * m.vel.z) * DT;
+  m.pos.x += m.vel.x * DT; m.pos.z += m.vel.z * DT;
+  let r2 = Math.hypot(m.pos.x, m.pos.z);
+  if (r2 > R_RIM - RM - 0.02) {
+    const s = (R_RIM - RM - 0.02) / r2; m.pos.x *= s; m.pos.z *= s;
+    const nx = m.pos.x / (r2 * s), nz = m.pos.z / (r2 * s), vn = m.vel.x * nx + m.vel.z * nz;
+    if (vn > 0) { m.vel.x -= 1.5 * vn * nx; m.vel.z -= 1.5 * vn * nz; }
+    r2 = R_RIM - RM - 0.02;
+  }
+  // posts that hold the bars
+  for (const p of posts) {
+    const dx = m.pos.x - p.x, dz = m.pos.z - p.z, d = Math.hypot(dx, dz), md = RM + p.r;
+    if (d < md && d > 1e-6) {
+      const nx = dx / d, nz = dz / d; m.pos.x = p.x + nx * md; m.pos.z = p.z + nz * md;
+      const vn = m.vel.x * nx + m.vel.z * nz;
+      if (vn < 0) { m.vel.x -= 1.6 * vn * nx; m.vel.z -= 1.6 * vn * nz; if (vn < -0.15) fx.push({ type: 'ting', v: -vn, x: m.pos.x, y: m.pos.y, z: m.pos.z }); }
+    }
+  }
+  r2 = Math.hypot(m.pos.x, m.pos.z);
+  const h2 = bowlD(Math.max(r2, R_HOLE));
+  m.pos.y = bowlY(Math.max(r2, R_HOLE)) + RM * Math.sqrt(1 + h2 * h2);
+  m.vel.y = h2 * (m.vel.x * m.pos.x + m.vel.z * m.pos.z) / r2;
+  m.spinAxis.set(m.vel.z, 0, -m.vel.x).normalize(); m.spinRate = sp / RM;
+  if (r2 < R_HOLE + RM * 0.3) { m.mode = 'drop'; }
+}
+
+function stepDrop(m) {
+  m.vel.y -= G * DT; m.vel.x *= 0.995; m.vel.z *= 0.995;
+  m.pos.addScaledVector(m.vel, DT);
+  const r = Math.hypot(m.pos.x, m.pos.z), rmin = 0.29, rmax = R_HOLE - RM - 0.004;
+  if (r > rmax || r < rmin) {
+    const tr = clamp(r, rmin, rmax), nx = m.pos.x / r, nz = m.pos.z / r;
+    m.pos.x = nx * tr; m.pos.z = nz * tr;
+    const vn = m.vel.x * nx + m.vel.z * nz;
+    if ((r > rmax && vn > 0) || (r < rmin && vn < 0)) { m.vel.x -= 1.4 * vn * nx; m.vel.z -= 1.4 * vn * nz; }
+  }
+  if (m.pos.y < 0.08) toBuffer(m);
+}
+
+function toBuffer(m) { m.mode = 'hidden'; m.mesh.visible = false; buffer.push(m); }
+
+// --- releases & schedule ------------------------------------------------
+const rels = []; let relPtr = 0;
+const armRels = Array.from({ length: N_ARMS }, () => []); const armPtr = new Array(N_ARMS).fill(0);
+let passCount = 0, nextPassT = 2.7;
+const T_HIT = new Array(N_ARMS).fill(1);
+function ensureSchedule(t) {
+  while (nextPassT < t + 40) {
+    const { ev, tEnd } = buildPass(passCount++, nextPassT);
+    for (const e of ev) { const r = { trel: e.t - T_HIT[e.bar], t: e.t, bar: e.bar, gain: e.gain }; rels.push(r); }
+    nextPassT = tEnd;
+  }
+  // keep tail sorted by release time
+  const tail = rels.splice(relPtr).sort((a, b) => a.trel - b.trel); rels.push(...tail);
+  for (let k = 0; k < N_ARMS; k++) { armRels[k] = rels.filter(r => r.bar === k); armPtr[k] = armRels[k].findIndex(r => !r.done); if (armPtr[k] < 0) armPtr[k] = armRels[k].length; }
+}
+let releaseHook = null;
+function doRelease(r, t) {
+  r.done = true; const k = r.bar; armPtr[k]++;
+  const q = queues[k], m = q[0];
+  if (m && m.mode === 'track' && m.kind === 0 && m.s >= m.track.L - 0.03) {
+    q.shift(); q.forEach((mm, i) => mm.qi = i);
+    m.track = ramps[k]; m.kind = 1; m.s = 0; m.v = 0; m.bar = k; m.struck = false; m.noteGain = r.gain;
+    m.expect = t + T_HIT[k];
+    stats.released++;
+    gates[k].tOpen = t;
+    if (releaseHook) releaseHook(k, t + T_HIT[k], r.gain);
+  } else { stats.starved++; stats.late.push([k, +t.toFixed(2), m ? m.mode + ':' + (m.track ? (m.track.L - m.s).toFixed(2) : '') : 'empty']); }
+}
+
+// --- lift ----------------------------------------------------------------
+const travel = deliver.map(tr => { // seconds from lift exit to gate (approx)
+  const m = { track: tr, s: 0, v: 0.45, kind: 1, qi: 0 }; let n = 0;
+  while (m.s < tr.L - 0.01 && n < 360 * 20) { let a = -G * K * tr.ty(m.s) - CD * m.v * m.v - MU * G; m.v = Math.max(0.05, m.v + a * DT); m.s += m.v * DT; n++; }
+  return n * DT;
+});
+function chooseArm(t) {
+  let best = -1, bestSlack = Infinity;
+  for (let k = 0; k < N_ARMS; k++) {
+    const q = queues[k]; if (q.length >= CAP) continue;
+    const need = armRels[k][armPtr[k] + q.length];
+    if (!need) continue;
+    const slack = need.trel - (t + travel[k] + 0.6);
+    const score = slack < 0 ? slack - 100 : slack;
+    if (score < bestSlack && slack < 60) { bestSlack = score; best = k; }
+  }
+  if (best >= 0) return best;
+  let mn = Infinity;
+  for (let k = 0; k < N_ARMS; k++) { const q = queues[k]; if (q.length < Math.min(CAP, 3) && q.length < mn) { mn = q.length; best = k; } }
+  return best;
+}
+function stockCount() { let s = liftList.length; for (const q of queues) s += q.length; return s; }
+function demandWithin(t, h) { let c = 0; for (let i = relPtr; i < rels.length && rels[i].trel < t + h; i++) c++; return c; }
+function liftY(m) { return Y_LOAD + LEAD * (sim.liftA - m.a0) / TAU; }
+function stepLift(t) {
+  sim.liftW = OMEGA * sstep(0, 1.4, t);
+  sim.liftA += sim.liftW * DT;
+  const slot = Math.floor(sim.liftA * STARTS / TAU);
+  if (slot > sim.slot) {
+    sim.slot = slot;
+    if (buffer.length && stockCount() < demandWithin(t, 16) + 5 && stockCount() < N_ARMS * CAP - 4) {
+      const m = buffer.shift(); m.mode = 'lift'; m.a0 = slot * TAU / STARTS; m.mesh.visible = true; liftList.push(m);
+    }
+  }
+  for (let i = liftList.length - 1; i >= 0; i--) {
+    const m = liftList[i];
+    if (liftY(m) >= Y_EXIT) {
+      const k = chooseArm(t);
+      if (k < 0) continue; // wait at top (should not happen)
+      liftList.splice(i, 1);
+      m.mode = 'track'; m.kind = 0; m.track = deliver[k]; m.s = 0; m.v = 0.45; m.arm = k;
+      queues[k].push(m); m.qi = queues[k].length - 1;
+      fx.push({ type: 'exit' });
+    }
+  }
+}
+
+function stepSim() {
+  const t = sim.n * DT;
+  if (rels.length - relPtr < 60) ensureSchedule(t);
+  while (relPtr < rels.length && rels[relPtr].trel <= t) { doRelease(rels[relPtr], t); relPtr++; }
+  stepLift(t);
+  for (const m of marbles) {
+    switch (m.mode) {
+      case 'track': stepTrack(m, t); break;
+      case 'air': stepAir(m, t); break;
+      case 'bowl': stepBowl(m); break;
+      case 'drop': stepDrop(m); break;
+    }
+  }
+  // marble–marble contacts in the bowl
+  for (let i = 0; i < marbles.length; i++) {
+    const a = marbles[i]; if (a.mode !== 'bowl') continue;
+    for (let j = i + 1; j < marbles.length; j++) {
+      const b = marbles[j]; if (b.mode !== 'bowl') continue;
+      const dx = b.pos.x - a.pos.x, dz = b.pos.z - a.pos.z, d = Math.hypot(dx, dz);
+      if (d < 2 * RM && d > 1e-6) {
+        const nx = dx / d, nz = dz / d, o = (2 * RM - d) * 0.5;
+        a.pos.x -= nx * o; a.pos.z -= nz * o; b.pos.x += nx * o; b.pos.z += nz * o;
+        const vr = (b.vel.x - a.vel.x) * nx + (b.vel.z - a.vel.z) * nz;
+        if (vr < 0) {
+          const jj = -0.92 * vr; a.vel.x -= jj * nx; a.vel.z -= jj * nz; b.vel.x += jj * nx; b.vel.z += jj * nz;
+          if (vr < -0.12) fx.push({ type: 'click', v: -vr, x: a.pos.x, y: a.pos.y, z: a.pos.z });
+        }
+      }
+    }
+  }
+  sim.n++; sim.t = sim.n * DT;
+}
+
+/* =====================================================================
+   PLACE THE BARS where the marbles actually land
+   ===================================================================== */
+const gates = Array.from({ length: N_ARMS }, () => ({ tOpen: -10 }));
+function makeTemp(track) { return { track, kind: 1, s: 0, v: 0, qi: 0, mode: 'track', pos: new V3(), vel: new V3(), spinAxis: new V3(), spinRate: 0, bar: -1, struck: false }; }
+const BAR_DROP = 0.62;
+const barInfo = [];
+for (let k = 0; k < N_ARMS; k++) {
+  const tr = ramps[k], m = makeTemp(tr);
+  let n = 0, lipY = tr.P[3 * (tr.N - 1) + 1];
+  const yT = lipY - BAR_DROP;
+  while (n < 360 * 6) {
+    if (m.mode === 'track') stepTrack(m, n * DT); else { m.vel.y -= G * DT; m.pos.addScaledVector(m.vel, DT); if (m.pos.y <= yT && m.vel.y < 0) break; }
+    n++;
+  }
+  const P = m.pos.clone(), Vv = m.vel.clone();
+  const vh = new V3(Vv.x, 0, Vv.z).normalize();
+  const beta = 41 * D2R;
+  const nrm = new V3().addScaledVector(vh, -Math.sin(beta)).addScaledVector(new V3(0, 1, 0), Math.cos(beta)).normalize();
+  const a = new V3().crossVectors(new V3(0, 1, 0), vh).normalize();
+  const w = new V3().crossVectors(a, nrm).normalize();
+  const f = FREQ[k], L = 0.48 * Math.sqrt(FREQ[10] / f), W = 0.125 + 0.035 * (L - 0.48) / 0.48;
+  const c = P.clone().addScaledVector(nrm, -RM);
+  bars[k] = { c, n: nrm, a, w, halfL: L / 2, halfW: W / 2, L, W, f, ts: -10, amp: 0, lipSpeed: 0 };
+  barInfo.push({ k, lipY, speedAtBar: Vv.length() });
+}
+// measure exact strike times with the bars in place
+for (let k = 0; k < N_ARMS; k++) {
+  const m = makeTemp(ramps[k]); m.bar = k;
+  let hit = null; const saved = strikeHook;
+  strikeHook = (b, t, vn) => { hit = { t, vn }; };
+  let n = 0; const fxLen = fx.length;
+  while (!hit && n < 360 * 8) { if (m.mode === 'track') stepTrack(m, n * DT); else stepAir(m, n * DT); n++; }
+  strikeHook = saved; fx.length = fxLen;
+  T_HIT[k] = hit ? hit.t : 1.5; bars[k].vn = hit ? hit.vn : 3;
+  // follow the rebound to see where it lands (for diagnostics)
+  let n2 = 0; while (m.mode === 'air' && n2 < 360 * 3) { stepAir(m, 0); n2++; }
+  barInfo[k].T = T_HIT[k]; barInfo[k].vn = bars[k].vn; barInfo[k].land = Math.hypot(m.pos.x, m.pos.z); barInfo[k].mode = m.mode;
+  fx.length = fxLen;
+}
+stats.strikes = 0; stats.maxErr = 0;
+
+/* =====================================================================
+   RENDERER, SCENE, LIGHT
+   ===================================================================== */
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.4;
+document.body.prepend(renderer.domElement);
+
+const scene = new THREE.Scene();
+const FOGC = new THREE.Color(0.016, 0.011, 0.008);
+scene.fog = new THREE.Fog(FOGC, 7.5, 17);
+const camera = new THREE.PerspectiveCamera(32, innerWidth / innerHeight, 0.05, 120);
+
+// environment for reflections: a dim room with a few soft boxes
+{
+  const s = new THREE.Scene();
+  s.background = new THREE.Color(0.01, 0.008, 0.006);
+  const room = new THREE.Mesh(new THREE.BoxGeometry(30, 16, 30), new THREE.MeshBasicMaterial({ color: new THREE.Color(0.08, 0.058, 0.042), side: THREE.BackSide }));
+  room.position.y = 6; s.add(room);
+  const panel = (w, h, col, pos, look) => { const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ color: col, side: THREE.DoubleSide })); m.position.copy(pos); m.lookAt(look); s.add(m); };
+  panel(9, 5, new THREE.Color(6, 4.8, 3.4), new V3(3, 13, 5), new V3(0, 0, 0));
+  panel(3, 9, new THREE.Color(0.45, 0.55, 0.8), new V3(-13, 5, -3), new V3(0, 3, 0));
+  panel(16, 1.0, new THREE.Color(2.2, 1.3, 0.7), new V3(0, 2.5, -13.5), new V3(0, 2.5, 0));
+  panel(2.5, 2.5, new THREE.Color(3.5, 3, 2.4), new V3(11, 7, 8), new V3(0, 2, 0));
+  panel(5, 1.5, new THREE.Color(1.2, 0.8, 0.5), new V3(9, 1.2, -9), new V3(0, 1, 0));
+  const pm = new THREE.PMREMGenerator(renderer);
+  scene.environment = pm.fromScene(s, 0.02).texture;
+}
+// backdrop
+{
+  const m = new THREE.Mesh(new THREE.SphereGeometry(60, 32, 16), new THREE.ShaderMaterial({
+    side: THREE.BackSide, depthWrite: false, fog: false,
+    vertexShader: `varying vec3 vP; void main(){ vP = normalize(position); gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.); }`,
+    fragmentShader: `varying vec3 vP; void main(){ float h=vP.y;
+      vec3 low=vec3(0.016,0.011,0.008), mid=vec3(0.016,0.011,0.008), top=vec3(0.003,0.0025,0.002);
+      vec3 c=mix(mid,top,smoothstep(0.0,0.55,h)); c=mix(c,low,smoothstep(0.03,-0.2,h));
+      gl_FragColor=vec4(c,1.); }`
+  }));
+  scene.add(m);
+}
+const key = new THREE.SpotLight(0xffd2a0, 1700, 0, 0.40, 0.9, 2);
+key.position.set(3.2, 10.5, 4.2); key.target.position.set(0, 1.2, 0);
+key.castShadow = true; key.shadow.mapSize.set(2048, 2048); key.shadow.bias = -0.00012; key.shadow.normalBias = 0.015;
+key.shadow.camera.near = 5; key.shadow.camera.far = 18;
+scene.add(key, key.target);
+const rim = new THREE.DirectionalLight(0xffe2c4, 0.45); rim.position.set(-6, 4, -7); scene.add(rim);
+const fill = new THREE.HemisphereLight(0x4a3a2c, 0x0b0806, 0.35); scene.add(fill);
+const warmBack = new THREE.PointLight(0xff9a50, 6, 12, 2); warmBack.position.set(-2, 0.6, -5.5); scene.add(warmBack);
+
+/* =====================================================================
+   PROCEDURAL TEXTURES
+   ===================================================================== */
+function mulberry(a) { return function () { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+function makeNoise(seed) {
+  const R = mulberry(seed), S = 256, g = new Float32Array(S * S); for (let i = 0; i < S * S; i++) g[i] = R();
+  return (x, y, px = S) => {
+    const xi = Math.floor(x), yi = Math.floor(y), xf = x - xi, yf = y - yi, u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf);
+    const x0 = ((xi % px) + px) % px, x1 = (x0 + 1) % px, y0 = ((yi % S) + S) % S, y1 = (y0 + 1) % S;
+    const a = g[y0 * S + (x0 % S)], b = g[y0 * S + (x1 % S)], c = g[y1 * S + (x0 % S)], d = g[y1 * S + (x1 % S)];
+    return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
+  };
+}
+function fbm(n, x, y, oct, px) { let s = 0, a = 0.5, f = 1, t = 0; for (let i = 0; i < oct; i++) { s += a * n(x * f, y * f, px * f); t += a; f *= 2; a *= 0.5; } return s / t; }
+function woodTexture({ W, H, rings, warp, base, dark, seed, px, planks = 0, fiberY = 0.4 }) {
+  const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+  const ctx = cv.getContext('2d'), img = ctx.createImageData(W, H), d = img.data;
+  const n = makeNoise(seed), n2 = makeNoise(seed + 11), n3 = makeNoise(seed + 23);
+  for (let y = 0; y < H; y++) {
+    const v = y / H;
+    let pv = v, off = 0, seam = 1;
+    if (planks) { const pi = Math.floor(v * planks); pv = v * planks - pi; off = pi * 37; seam = 0.55 + 0.45 * sstep(0, 0.02, pv) * sstep(1, 0.98, pv); }
+    for (let x = 0; x < W; x++) {
+      const u = x / W;
+      const wv = fbm(n, u * px + off, pv * 3 + off, 4, px);
+      const g = (planks ? pv * rings : v * rings) + wv * warp + 0.25 * n3(u * px * 2 + off, pv * 6, px * 2);
+      const ring = 0.5 + 0.5 * Math.cos(TAU * g);
+      const band = Math.pow(ring, 3.2);
+      const fib = n2(u * px * 16, y * fiberY, px * 16);
+      const tone = (0.80 + 0.36 * wv + 0.16 * (fib - 0.5)) * seam;
+      const i4 = (y * W + x) * 4;
+      for (let c = 0; c < 3; c++) d[i4 + c] = clamp(lerp(base[c], dark[c], band * 0.6) * tone, 0, 255);
+      d[i4 + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 8;
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  return tex;
+}
+const bowlTex = woodTexture({ W: 512, H: 1024, rings: 46, warp: 1.6, base: [118, 72, 42], dark: [52, 28, 15], seed: 3, px: 6, fiberY: 0.9 });
+const tableTex = woodTexture({ W: 1024, H: 1024, rings: 9, warp: 2.4, base: [70, 44, 27], dark: [30, 18, 10], seed: 9, px: 3, planks: 7, fiberY: 0.35 });
+tableTex.repeat.set(3, 3);
+const plinthTex = woodTexture({ W: 1024, H: 256, rings: 5, warp: 3, base: [96, 58, 34], dark: [42, 24, 13], seed: 17, px: 8, fiberY: 2.5 });
+plinthTex.repeat.set(2, 1);
+
+/* =====================================================================
+   MATERIALS
+   ===================================================================== */
+const brass = new THREE.MeshPhysicalMaterial({ color: 0xd6ab62, metalness: 1, roughness: 0.27, envMapIntensity: 1.1 });
+const darkBrass = new THREE.MeshPhysicalMaterial({ color: 0x9c7440, metalness: 1, roughness: 0.38 });
+const walnut = new THREE.MeshPhysicalMaterial({ map: bowlTex, roughness: 0.6, clearcoat: 0.2, clearcoatRoughness: 0.3, side: THREE.DoubleSide, envMapIntensity: 0.3 });
+const plinthMat = new THREE.MeshPhysicalMaterial({ map: plinthTex, roughness: 0.45, clearcoat: 0.6, clearcoatRoughness: 0.2, envMapIntensity: 0.6 });
+const tableMat = new THREE.MeshStandardMaterial({ map: tableTex, roughness: 0.62, envMapIntensity: 0.35 });
+const feltMat = new THREE.MeshStandardMaterial({ color: 0x5a1a14, roughness: 0.95 });
+const voidMat = new THREE.MeshBasicMaterial({ color: 0x020101 });
+const glassTube = new THREE.ShaderMaterial({
+  transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+  uniforms: { lightDir: { value: new V3(3.2, 10.5, 4.2).normalize() } },
+  vertexShader: `varying vec3 vN; varying vec3 vV; varying vec3 vW;
+    void main(){ vec4 w = modelMatrix*vec4(position,1.); vW=w.xyz; vN=normalize(mat3(modelMatrix)*normal); vV=normalize(cameraPosition-w.xyz); gl_Position=projectionMatrix*viewMatrix*w; }`,
+  fragmentShader: `uniform vec3 lightDir; varying vec3 vN; varying vec3 vV; varying vec3 vW;
+    void main(){ vec3 n=normalize(vN); if(!gl_FrontFacing) n=-n; float f=1.0-abs(dot(n,vV));
+      float fres=pow(f,4.0)*0.55+0.012;
+      vec3 h=normalize(lightDir+vV); float sp=pow(max(dot(n,h),0.0),90.0)*1.6;
+      vec3 c=vec3(0.85,0.9,1.0)*fres*0.5 + vec3(1.0,0.86,0.68)*sp;
+      gl_FragColor=vec4(c,1.0); }`
+});
+
+/* =====================================================================
+   GEOMETRY HELPERS
+   ===================================================================== */
+const cylUnit = new THREE.CylinderGeometry(1, 1, 1, 10, 1);
+const rodSets = new Map();
+function addRod(mat, a, b, r) {
+  if (!rodSets.has(mat)) rodSets.set(mat, []);
+  const d = new V3().subVectors(b, a), L = d.length();
+  const q = new THREE.Quaternion().setFromUnitVectors(new V3(0, 1, 0), d.clone().normalize());
+  rodSets.get(mat).push(new THREE.Matrix4().compose(a.clone().add(b).multiplyScalar(0.5), q, new V3(r, L, r)));
+}
+const sphereSets = new Map();
+function addBall(mat, p, r) { if (!sphereSets.has(mat)) sphereSets.set(mat, []); sphereSets.get(mat).push(new THREE.Matrix4().compose(p, new THREE.Quaternion(), new V3(r, r, r))); }
+function flushInstances() {
+  for (const [mat, ms] of rodSets) { const im = new THREE.InstancedMesh(cylUnit, mat, ms.length); ms.forEach((m, i) => im.setMatrixAt(i, m)); im.castShadow = true; im.receiveShadow = true; scene.add(im); }
+  const sg = new THREE.SphereGeometry(1, 14, 10);
+  for (const [mat, ms] of sphereSets) { const im = new THREE.InstancedMesh(sg, mat, ms.length); ms.forEach((m, i) => im.setMatrixAt(i, m)); im.castShadow = true; scene.add(im); }
+}
+// tube along a polyline using supplied frames
+function tubeInto(acc, pts, ns, bs, radius, radial = 8) {
+  const base = acc.pos.length / 3;
+  for (let i = 0; i < pts.length; i++) {
+    for (let j = 0; j <= radial; j++) {
+      const an = j / radial * TAU, c = Math.cos(an), s = Math.sin(an);
+      const nx = ns[i].x * c + bs[i].x * s, ny = ns[i].y * c + bs[i].y * s, nz = ns[i].z * c + bs[i].z * s;
+      acc.pos.push(pts[i].x + nx * radius, pts[i].y + ny * radius, pts[i].z + nz * radius); acc.nor.push(nx, ny, nz);
+    }
+  }
+  for (let i = 0; i < pts.length - 1; i++) for (let j = 0; j < radial; j++) {
+    const a = base + i * (radial + 1) + j, b = a + radial + 1;
+    acc.idx.push(a, b, a + 1, b, b + 1, a + 1);
+  }
+}
+function accToMesh(acc, mat) {
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(acc.pos, 3));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(acc.nor, 3));
+  g.setIndex(acc.idx);
+  const m = new THREE.Mesh(g, mat); m.castShadow = true; m.receiveShadow = true; return m;
+}
+
+/* =====================================================================
+   BUILD: table, plinth, bowl
+   ===================================================================== */
+{
+  const t = new THREE.Mesh(new THREE.CircleGeometry(26, 96), tableMat); t.rotation.x = -Math.PI / 2; t.receiveShadow = true; scene.add(t);
+  const pl = new THREE.Mesh(new THREE.CylinderGeometry(2.62, 2.7, 0.26, 160, 1), plinthMat); pl.position.y = 0.13; pl.castShadow = pl.receiveShadow = true; scene.add(pl);
+  const band = new THREE.Mesh(new THREE.CylinderGeometry(2.665, 2.67, 0.03, 160, 1, true), brass); band.position.y = 0.205; scene.add(band);
+  const lip = new THREE.Mesh(new THREE.TorusGeometry(2.62, 0.012, 8, 160), brass); lip.rotation.x = Math.PI / 2; lip.position.y = 0.26; scene.add(lip);
+  // turned bowl
+  const prof = [];
+  prof.push(new THREE.Vector2(R_HOLE - 0.016, 0.06));
+  prof.push(new THREE.Vector2(R_HOLE - 0.016, Y_HOLE - 0.05));
+  prof.push(new THREE.Vector2(R_HOLE - 0.010, Y_HOLE - 0.012));
+  prof.push(new THREE.Vector2(R_HOLE - 0.002, Y_HOLE - 0.001));
+  for (let i = 0; i <= 90; i++) { const r = R_HOLE + (R_RIM - R_HOLE) * Math.pow(i / 90, 1.6); prof.push(new THREE.Vector2(r, bowlY(r))); }
+  const rr = [[0.02, 0.025], [0.05, 0.045], [0.085, 0.05], [0.115, 0.04], [0.135, 0.015], [0.15, -0.03], [0.165, -0.2], [0.18, -0.45], [0.19, -0.54]];
+  for (const [dx, dy] of rr) prof.push(new THREE.Vector2(R_RIM + dx, Y_RIM + dy));
+  const lg = new THREE.LatheGeometry(prof, 200);
+  // arc-length v coordinates so the turned grain is even
+  const cum = [0]; for (let i = 1; i < prof.length; i++) cum.push(cum[i - 1] + prof[i].distanceTo(prof[i - 1]));
+  const uv = lg.attributes.uv;
+  for (let i = 0; i <= 200; i++) for (let j = 0; j < prof.length; j++) uv.setXY(i * prof.length + j, i / 200 * 3, cum[j] / cum[cum.length - 1]);
+  const bowl = new THREE.Mesh(lg, walnut); bowl.receiveShadow = true; bowl.castShadow = true; scene.add(bowl);
+  const inlay = new THREE.Mesh(new THREE.TorusGeometry(R_RIM + 0.07, 0.014, 10, 200), brass); inlay.rotation.x = Math.PI / 2; inlay.position.y = Y_RIM + 0.055; scene.add(inlay);
+  const holeRing = new THREE.Mesh(new THREE.TorusGeometry(R_HOLE + 0.004, 0.01, 8, 80), brass); holeRing.rotation.x = Math.PI / 2; holeRing.position.y = Y_HOLE + 0.004; scene.add(holeRing);
+  const floor = new THREE.Mesh(new THREE.CircleGeometry(R_HOLE, 40), voidMat); floor.rotation.x = -Math.PI / 2; floor.position.y = 0.07; scene.add(floor);
+}
+
+/* =====================================================================
+   BUILD: central column — glass tube, Archimedes screw, crown
+   ===================================================================== */
+const screw = new THREE.Group(); scene.add(screw);
+{
+  const tube = new THREE.Mesh(new THREE.CylinderGeometry(0.175, 0.175, (3.2 + YC), 64, 1, true), glassTube);
+  tube.position.y = 0.08 + (3.2 + YC) / 2; tube.renderOrder = 2; scene.add(tube);
+  for (const y of [0.42, 3.28 + YC]) { const c = new THREE.Mesh(new THREE.CylinderGeometry(0.19, 0.19, 0.05, 48), brass); c.position.y = y; c.castShadow = true; scene.add(c); }
+  // shaft
+  const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 3.55 + YC, 16), darkBrass); shaft.position.y = (3.55 + YC) / 2 + 0.03; screw.add(shaft);
+  // helicoid blades
+  const OFF = RM / Math.cos(Math.atan(LEAD / (TAU * LIFT_R)));
+  const YB0 = Y_LOAD - OFF - LEAD * THETA_G / TAU;
+  const blades = [];
+  for (let j = 0; j < STARTS; j++) {
+    const yMin = -0.1, yMax = Y_EXIT - OFF + 0.005;
+    const p0 = TAU * (yMin - YB0 - j * LEAD / STARTS) / LEAD, p1 = TAU * (yMax - YB0 - j * LEAD / STARTS) / LEAD;
+    const segs = Math.ceil((p1 - p0) / (TAU / 64)), radial = 3;
+    const pos = [], idx = [];
+    for (let i = 0; i <= segs; i++) {
+      const psi = p0 + (p1 - p0) * i / segs, y = YB0 + LEAD * psi / TAU + j * LEAD / STARTS;
+      for (let q = 0; q <= radial; q++) { const r = 0.024 + (0.158 - 0.024) * q / radial; pos.push(r * Math.cos(psi), y, r * Math.sin(psi)); }
+    }
+    for (let i = 0; i < segs; i++) for (let q = 0; q < radial; q++) { const a = i * (radial + 1) + q, b = a + radial + 1; idx.push(a, b, a + 1, b, b + 1, a + 1); }
+    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx); g.computeVertexNormals();
+    blades.push(g);
+  }
+  const bladeMat = darkBrass.clone(); bladeMat.color.set(0x5a4228); bladeMat.side = THREE.DoubleSide; bladeMat.roughness = 0.55; bladeMat.envMapIntensity = 0.45;
+  const bm = new THREE.Mesh(mergeGeometries(blades), bladeMat); bm.castShadow = true; screw.add(bm);
+  // guide rod for rising marbles
+  const gx = Math.cos(THETA_G) * (LIFT_R + RM + 0.006), gz = Math.sin(THETA_G) * (LIFT_R + RM + 0.006);
+  addRod(brass, new V3(gx, 0.1, gz), new V3(gx, Y_EXIT - 0.02, gz), 0.006);
+  // outer frame rods
+  for (let i = 0; i < 3; i++) { const an = THETA_G + 0.9 + i * TAU / 3; const x = Math.cos(an) * 0.21, z = Math.sin(an) * 0.21; addRod(darkBrass, new V3(x, 0.1, z), new V3(x, 3.66 + YC, z), 0.011); }
+  // crown
+  const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.235, 0.2, 0.05, 48), brass); cap.position.y = 3.68 + YC; cap.castShadow = true; scene.add(cap);
+  const dome = new THREE.Mesh(new THREE.SphereGeometry(0.15, 32, 16, 0, TAU, 0, Math.PI / 2), brass); dome.position.y = 3.7 + YC; scene.add(dome);
+  const fin = new THREE.Mesh(new THREE.ConeGeometry(0.022, 0.26, 16), brass); fin.position.y = 3.95 + YC; scene.add(fin);
+  addBall(brass, new V3(0, 3.86 + YC, 0), 0.04);
+  addBall(brass, new V3(0, 4.09 + YC, 0), 0.016);
+  for (let i = 0; i < 4; i++) { const an = THETA_G + 0.45 + i * TAU / 4; addRod(brass, polar(0.17, an, 3.3 + YC), polar(0.2, an, 3.66 + YC), 0.009); }
+}
+
+/* =====================================================================
+   BUILD: tracks (rails, sleepers, supports, gates)
+   ===================================================================== */
+const railAcc = { pos: [], nor: [], idx: [] };
+const allSamples = []; // for clearance checks
+function railsFor(tr, s0, s1, ties = true) {
+  const step = 3, L = [], R = [], NL = [], BL = [];
+  const p = new V3(), n = new V3(), b = new V3(), t = new V3();
+  const i0 = Math.max(0, Math.floor(s0 / tr.ds)), i1 = Math.min(tr.N - 1, Math.ceil(s1 / tr.ds));
+  for (let i = i0; i <= i1; i += step) {
+    const s = Math.min(i * tr.ds, tr.L);
+    tr.pos(s, p); tr.vec(tr.Nn, s, n); tr.vec(tr.B, s, b);
+    L.push(p.clone().addScaledVector(n, -HC).addScaledVector(b, RAIL_W));
+    R.push(p.clone().addScaledVector(n, -HC).addScaledVector(b, -RAIL_W));
+    NL.push(n.clone()); BL.push(b.clone());
+    if (i % 5 === 0) allSamples.push(p.clone());
+  }
+  tubeInto(railAcc, L, NL, BL, RAIL_R, 7); tubeInto(railAcc, R, NL, BL, RAIL_R, 7);
+  if (ties) for (let s = s0 + 0.05; s < s1 - 0.02; s += 0.15) {
+    tr.pos(s, p); tr.vec(tr.Nn, s, n); tr.vec(tr.B, s, b);
+    const c = p.clone().addScaledVector(n, -(HC + RAIL_R + 0.003));
+    addRod(darkBrass, c.clone().addScaledVector(b, RAIL_W + 0.004), c.clone().addScaledVector(b, -RAIL_W - 0.004), 0.0045);
+  }
+  // end caps
+  addBall(brass, L[0], RAIL_R * 1.25); addBall(brass, R[0], RAIL_R * 1.25);
+  addBall(brass, L[L.length - 1], RAIL_R * 1.25); addBall(brass, R[R.length - 1], RAIL_R * 1.25);
+}
+const LAST = N_ARMS - 1;
+railsFor(deliver[LAST], 0, junctionS[LAST] + 0.06);
+for (let k = 0; k < N_ARMS; k++) {
+  railsFor(deliver[k], junctionS[k] + 0.01, deliver[k].L);
+  railsFor(ramps[k], 0, ramps[k].L);
+}
+scene.add(accToMesh(railAcc, brass));
+
+// supports: horizontal spokes from the column (one collar per level)
+function clearance(a, b, ignore) {
+  let mn = Infinity;
+  for (let i = 1; i < 30; i++) {
+    const p = a.clone().lerp(b, i / 30);
+    if (p.distanceTo(b) < 0.1) continue;
+    for (const q of allSamples) { if (ignore && q.distanceTo(ignore) < 0.18) continue; const d = p.distanceTo(q); if (d < mn) mn = d; }
+  }
+  return mn;
+}
+const collarYs = [];
+function supportAt(tr, s, slant = 0) {
+  const p = tr.pos(s, new V3()), n = tr.vec(tr.Nn, s, new V3());
+  const end = p.clone().addScaledVector(n, -(HC + RAIL_R + 0.012));
+  const an = Math.atan2(end.z, end.x);
+  const start = polar(0.2, an, end.y + slant);
+  if (clearance(start, end, end) < 0.085) return false;
+  addRod(brass, start, end, 0.0075);
+  addBall(brass, end, 0.014);
+  collarYs.push(start.y);
+  return true;
+}
+{
+  // ring supports, slanted up to the crown collar
+  for (let i = 0; i < 6; i++) {
+    const phi = A0 + (i + 0.5) * TAU / 6 * 0.95;
+    const s = Math.min(junctionS[LAST], chutePts.length ? (junctionS[0] - (armAngle(0) - phi) * RING_R) : 0);
+    const tr = deliver[LAST];
+    const sp = clamp(s, 0.3, junctionS[LAST]);
+    const p = tr.pos(sp, new V3()), n = tr.vec(tr.Nn, sp, new V3());
+    const end = p.clone().addScaledVector(n, -(HC + RAIL_R + 0.012));
+    const an = Math.atan2(end.z, end.x);
+    addRod(brass, polar(0.2, an, 3.58 + YC), end, 0.0075); addBall(brass, end, 0.013);
+  }
+  const fr = [0.5, 0.97];
+  for (const f of fr) {
+    let s = f * ramps[0].L, ok = false;
+    for (let tries = 0; tries < 8 && !ok; tries++) {
+      ok = supportAt(ramps[0], s, 0);
+      if (ok) { for (let k = 1; k < N_ARMS; k++) supportAt(ramps[k], s, 0); }
+      else s -= 0.05;
+    }
+  }
+  for (let k = 0; k < N_ARMS; k++) supportAt(deliver[k], deliver[k].L - 0.02, 0);
+  // collars on the column for each spoke level
+  const lv = [...new Set(collarYs.map(y => y.toFixed(2)))].map(Number);
+  for (const y of [...lv, 3.58 + YC]) { const c = new THREE.Mesh(new THREE.TorusGeometry(0.2, 0.014, 8, 48), brass); c.rotation.x = Math.PI / 2; c.position.y = y; c.castShadow = true; scene.add(c); }
+}
+// gates (little brass escapement flags)
+const gateMeshes = [];
+{
+  const flagGeo = new THREE.BoxGeometry(0.008, 0.075, RAIL_W * 2 + 0.02); flagGeo.translate(0, -0.0375, 0);
+  for (let k = 0; k < N_ARMS; k++) {
+    const tr = deliver[k], s = tr.L;
+    const p = tr.pos(s, new V3()), t = tr.vec(tr.T, s, new V3()), n = tr.vec(tr.Nn, s, new V3()), b = tr.vec(tr.B, s, new V3());
+    const piv = p.clone().addScaledVector(t, RM + 0.008).addScaledVector(n, RM + 0.028);
+    const grp = new THREE.Group(); grp.position.copy(piv);
+    grp.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(t, n, b));
+    const flag = new THREE.Mesh(flagGeo, brass); flag.castShadow = true; grp.add(flag);
+    const axle = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, RAIL_W * 2 + 0.05, 8), darkBrass); axle.rotation.x = Math.PI / 2; grp.add(axle);
+    scene.add(grp); gateMeshes.push(flag);
+    addRod(darkBrass, piv.clone().addScaledVector(b, RAIL_W + 0.025), piv.clone().addScaledVector(b, RAIL_W + 0.025).addScaledVector(n, -(RM + 0.028 + HC + 0.01)), 0.004);
+  }
+}
+
+/* =====================================================================
+   BUILD: tuned bars
+   ===================================================================== */
+const barMeshes = [];
+const brushed = (() => {
+  const cv = document.createElement('canvas'); cv.width = 64; cv.height = 512; const c = cv.getContext('2d');
+  const R = mulberry(41);
+  for (let y = 0; y < 512; y++) { const v = 0.2 + 0.12 * R() + 0.05 * Math.sin(y * 0.3); const g = Math.round(v * 255); c.fillStyle = `rgb(${g},${g},${g})`; c.fillRect(0, y, 64, 1); }
+  const t = new THREE.CanvasTexture(cv); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(1, 3); return t;
+})();
+function barGeometry(L, W) {
+  const sh = new THREE.Shape(), h = BAR_TH / 2 - 0.006, A = BAR_TH * 0.42, n = 48;
+  sh.moveTo(-L / 2 + 0.006, h);
+  sh.lineTo(L / 2 - 0.006, h);
+  for (let i = 0; i <= n; i++) {
+    const x = L / 2 - 0.006 - (L - 0.012) * i / n, q = x / (0.36 * L);
+    const y = -h + (Math.abs(q) < 1 ? A * (1 - q * q) ** 2 : 0);
+    sh.lineTo(x, y);
+  }
+  const g = new THREE.ExtrudeGeometry(sh, { depth: W - 0.012, bevelEnabled: true, bevelThickness: 0.006, bevelSize: 0.006, bevelSegments: 3, curveSegments: 4 });
+  g.translate(0, 0, -(W - 0.012) / 2); g.computeVertexNormals();
+  return g;
+}
+{
+  const up = new V3(0, 1, 0);
+  for (let k = 0; k < N_ARMS; k++) {
+    const b = bars[k];
+    const mat = new THREE.MeshPhysicalMaterial({ color: 0xe6e2da, metalness: 1, roughness: 0.2, emissive: new THREE.Color(1.0, 0.62, 0.3), emissiveIntensity: 0, envMapIntensity: 2.4 });
+    const geo = barGeometry(b.L, b.W);
+    const mesh = new THREE.Mesh(geo, mat); mesh.castShadow = true; mesh.receiveShadow = true;
+    const center = b.c.clone().addScaledVector(b.n, -BAR_TH / 2);
+    mesh.position.copy(center);
+    mesh.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(b.a, b.n, b.w));
+    b.baseQ = mesh.quaternion.clone(); b.basePos = center.clone();
+    scene.add(mesh); barMeshes.push(mesh); b.mesh = mesh; b.mat = mat;
+    // node posts, tied together by a little cross-rail
+    const feet = [];
+    for (const sgn of [-1, 1]) {
+      const top = center.clone().addScaledVector(b.a, sgn * 0.276 * b.L).addScaledVector(b.n, -BAR_TH / 2 - 0.012);
+      const r = Math.hypot(top.x, top.z);
+      const bot = new V3(top.x, bowlY(r) - 0.01, top.z);
+      addRod(brass, bot, top, 0.011);
+      addRod(feltMat, top.clone().addScaledVector(b.n, -0.002), top.clone().addScaledVector(b.n, 0.012), 0.018);
+      addBall(darkBrass, new V3(top.x, bowlY(r) + 0.004, top.z), 0.022);
+      posts.push({ x: top.x, z: top.z, r: 0.016 });
+      feet.push(new V3(top.x, lerp(bowlY(r), top.y, 0.45), top.z));
+    }
+    addRod(darkBrass, feet[0], feet[1], 0.007);
+  }
+}
+flushInstances();
+
+/* =====================================================================
+   MARBLES
+   ===================================================================== */
+const marbleGeo = new THREE.SphereGeometry(RM, 40, 28);
+const vaneGeo = (() => {
+  const gs = [];
+  for (let i = 0; i < 3; i++) {
+    const g = new THREE.SphereGeometry(1, 20, 12);
+    g.applyMatrix4(new THREE.Matrix4().compose(new V3(), new THREE.Quaternion().setFromAxisAngle(new V3(0, 1, 0), i * Math.PI / 3), new V3(RM * 0.5, RM * 0.58, RM * 0.045)));
+    gs.push(g);
+  }
+  return mergeGeometries(gs);
+})();
+const PALETTE = [
+  { glass: 0xf4fbff, vane: 0xe39b3b }, { glass: 0xeefcf9, vane: 0x2b9f98 }, { glass: 0xf2f6ff, vane: 0x3a62c9 },
+  { glass: 0xfff6ee, vane: 0xb8322c }, { glass: 0xffffff, vane: 0xf1e8d6 }, { glass: 0xf3fff2, vane: 0x4fa65a },
+  { glass: 0xfff9e8, vane: 0xd8b24a }, { glass: 0xf5f2ff, vane: 0x7a4fb8 },
+];
+const glassMats = PALETTE.map(p => new THREE.MeshPhysicalMaterial({
+  color: p.glass, metalness: 0, roughness: 0.03, transmission: 1, thickness: RM * 1.6, ior: 1.52,
+  envMapIntensity: 1.8, specularIntensity: 1, clearcoat: 1, clearcoatRoughness: 0.03,
+  attenuationColor: new THREE.Color(p.glass), attenuationDistance: 0.6,
+}));
+const vaneMats = PALETTE.map(p => new THREE.MeshStandardMaterial({ color: p.vane, roughness: 0.35, metalness: 0.0, emissive: new THREE.Color(p.vane), emissiveIntensity: 0.06 }));
+function newMarble(i) {
+  const pi = i % PALETTE.length;
+  const mesh = new THREE.Mesh(marbleGeo, glassMats[pi]); mesh.castShadow = true;
+  const vane = new THREE.Mesh(vaneGeo, vaneMats[pi]); mesh.add(vane);
+  scene.add(mesh);
+  const m = { id: i, mesh, mode: 'hidden', track: null, kind: 0, s: 0, v: 0, qi: 0, pos: new V3(), vel: new V3(), spinAxis: new V3(1, 0, 0), spinRate: 0, bar: -1, struck: false, a0: 0 };
+  mesh.quaternion.setFromEuler(new THREE.Euler(Math.random() * 6, Math.random() * 6, Math.random() * 6));
+  marbles.push(m); return m;
+}
+// initial layout
+ensureSchedule(0);
+let mid = 0;
+for (let k = 0; k < N_ARMS; k++) {
+  const cnt = armRels[k].filter(r => r.trel < 9).length;
+  const fill = clamp(cnt + 1, 2, CAP);
+  for (let i = 0; i < fill; i++) {
+    const m = newMarble(mid++); m.mode = 'track'; m.kind = 0; m.track = deliver[k]; m.qi = i; m.s = deliver[k].L - 2 * RM * i; m.v = 0; m.mesh.visible = true;
+    queues[k].push(m);
+  }
+}
+{
+  let slot = 0;
+  for (;;) { const y = Y_LOAD + LEAD * slot / STARTS; if (y > Y_EXIT - 0.06) break; if (y < 1.5) { slot++; continue; } const m = newMarble(mid++); m.mode = 'lift'; m.a0 = -slot * TAU / STARTS; m.mesh.visible = true; liftList.push(m); slot++; }
+}
+for (let i = 0; i < 18; i++) { const m = newMarble(mid++); toBuffer(m); }
+
+/* =====================================================================
+   DUST IN THE LIGHT
+   ===================================================================== */
+let dust;
+{
+  const N = 520, pos = new Float32Array(N * 3), ph = new Float32Array(N);
+  const R = mulberry(5);
+  for (let i = 0; i < N; i++) { const r = Math.sqrt(R()) * 4.2, a = R() * TAU; pos[3 * i] = Math.cos(a) * r; pos[3 * i + 1] = 0.2 + R() * 5; pos[3 * i + 2] = Math.sin(a) * r; ph[i] = R() * 100; }
+  const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(pos, 3)); g.setAttribute('phase', new THREE.BufferAttribute(ph, 1));
+  const mat = new THREE.ShaderMaterial({
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    uniforms: { time: { value: 0 }, px: { value: renderer.getPixelRatio() } },
+    vertexShader: `attribute float phase; uniform float time; uniform float px; varying float vA;
+      void main(){ vec3 p=position; float t=time*0.05+phase;
+        p.x+=sin(t*1.3+phase)*0.25; p.z+=cos(t*1.1+phase*1.7)*0.25; p.y+=sin(t*0.7+phase*0.3)*0.3;
+        vec4 mv=modelViewMatrix*vec4(p,1.); gl_Position=projectionMatrix*mv;
+        float tw=0.5+0.5*sin(time*0.6+phase*3.0);
+        vA=(0.25+0.75*tw)*smoothstep(15.0,6.0,-mv.z)*smoothstep(4.3,1.5,length(p.xz));
+        gl_PointSize=px*(1.6+2.2*fract(phase*7.13))*(7.0/-mv.z); }`,
+    fragmentShader: `varying float vA; void main(){ vec2 d=gl_PointCoord-0.5; float a=smoothstep(0.5,0.0,length(d)); gl_FragColor=vec4(vec3(1.0,0.82,0.6)*a*vA*0.35,1.); }`
+  });
+  dust = new THREE.Points(g, mat); scene.add(dust);
+}
+
+/* a faint shaft of light from the lamp above */
+{
+  const from = key.position.clone(), to = new V3(0, 0.0, 0);
+  const len = from.distanceTo(to), rad = Math.tan(0.36) * len;
+  const g = new THREE.CylinderGeometry(0.15, rad, len, 64, 1, true); g.translate(0, -len / 2, 0);
+  const m = new THREE.Mesh(g, new THREE.ShaderMaterial({
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+    uniforms: { time: { value: 0 } },
+    vertexShader: `varying vec3 vN; varying vec3 vV; varying float vY; uniform float time;
+      void main(){ vec4 w=modelMatrix*vec4(position,1.); vN=normalize(mat3(modelMatrix)*normal); vV=normalize(cameraPosition-w.xyz); vY=-position.y/${len.toFixed(3)}; gl_Position=projectionMatrix*viewMatrix*w; }`,
+    fragmentShader: `varying vec3 vN; varying vec3 vV; varying float vY; uniform float time;
+      void main(){ float e=abs(dot(normalize(vN),vV)); float a=pow(e,2.5)*smoothstep(0.0,0.35,vY)*smoothstep(1.0,0.6,vY);
+        a*=0.045*(0.85+0.15*sin(time*0.4+vY*3.0)); gl_FragColor=vec4(vec3(1.0,0.8,0.55)*a,1.0); }`
+  }));
+  m.position.copy(from); m.quaternion.setFromUnitVectors(new V3(0, -1, 0), to.clone().sub(from).normalize());
+  scene.add(m); window.__shaft = m;
+}
+/* strike lights: a small pool reused for the most recent strikes */
+const strikeLights = [0, 1, 2].map(() => { const l = new THREE.PointLight(0xffc27a, 0, 1.6, 2); scene.add(l); return { l, t: -10, amp: 0 }; });
+let slIdx = 0;
+
+/* =====================================================================
+   POST
+   ===================================================================== */
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.36, 0.5, 0.9);
+composer.addPass(bloom);
+composer.addPass(new OutputPass());
+const finish = new ShaderPass({
+  uniforms: { tDiffuse: { value: null }, time: { value: 0 }, fade: { value: 0 } },
+  vertexShader: `varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.); }`,
+  fragmentShader: `uniform sampler2D tDiffuse; uniform float time; uniform float fade; varying vec2 vUv;
+    float h(vec2 p){ return fract(sin(dot(p,vec2(12.9898,78.233)))*43758.5453); }
+    void main(){ vec4 c=texture2D(tDiffuse,vUv); vec2 d=vUv-0.5; d.x*=1.25;
+      float v=smoothstep(0.95,0.18,length(d)); c.rgb*=mix(0.42,1.0,v);
+      c.rgb+= (h(vUv*1000.0+fract(time)*91.0)-0.5)*0.022;
+      c.rgb*=fade; gl_FragColor=c; }`
+});
+composer.addPass(finish);
+
+/* =====================================================================
+   AUDIO
+   ===================================================================== */
+let actx = null, audioStart = 0, dry, revSend, noiseBuf, rollGain, rumbleGain, master;
+function initAudio(ctxOverride) {
+  actx = ctxOverride || new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
+  master = actx.createGain(); master.gain.value = 0;
+  const comp = actx.createDynamicsCompressor(); comp.threshold.value = -16; comp.knee.value = 12; comp.ratio.value = 2.5; comp.attack.value = 0.004; comp.release.value = 0.3;
+  const hs = actx.createBiquadFilter(); hs.type = 'highshelf'; hs.frequency.value = 7000; hs.gain.value = -4;
+  comp.connect(hs); hs.connect(master); master.connect(actx.destination);
+  dry = actx.createGain(); dry.gain.value = 0.9; dry.connect(comp);
+  // generated hall-ish impulse response
+  const sr = actx.sampleRate, len = Math.floor(sr * 3.4), ir = actx.createBuffer(2, len, sr);
+  for (let ch = 0; ch < 2; ch++) {
+    const d = ir.getChannelData(ch); let lp = 0; const R = mulberry(31 + ch);
+    for (let i = 0; i < len; i++) {
+      const t = i / sr, env = Math.exp(-t * 2.3) * (t < 0.012 ? t / 0.012 : 1);
+      const k = 0.55 + 0.4 * Math.min(1, t / 2.5); lp = lp + (1 - k) * ((R() * 2 - 1) - lp);
+      d[i] = lp * env * 0.9;
+    }
+    for (const [tt, g] of [[0.017, 0.5], [0.029, 0.35], [0.041, 0.3], [0.063, 0.22]]) { const i = Math.floor((tt + ch * 0.004) * sr); d[i] += g; }
+  }
+  const conv = actx.createConvolver(); conv.buffer = ir;
+  revSend = actx.createGain(); revSend.gain.value = 0.34;
+  const pre = actx.createDelay(0.1); pre.delayTime.value = 0.018;
+  revSend.connect(pre); pre.connect(conv); conv.connect(comp);
+  // noise
+  noiseBuf = actx.createBuffer(1, sr * 2, sr); { const d = noiseBuf.getChannelData(0); const R = mulberry(77); for (let i = 0; i < d.length; i++) d[i] = R() * 2 - 1; }
+  // continuous rolling textures (very quiet)
+  const mk = (type, f, q) => { const s = actx.createBufferSource(); s.buffer = noiseBuf; s.loop = true; const bq = actx.createBiquadFilter(); bq.type = type; bq.frequency.value = f; bq.Q.value = q; const g = actx.createGain(); g.gain.value = 0; s.connect(bq); bq.connect(g); g.connect(dry); g.connect(revSend); s.start(); return g; };
+  rollGain = mk('bandpass', 2400, 0.7);
+  rumbleGain = mk('lowpass', 260, 0.7);
+}
+function voice(dest, when, pan) {
+  const p = actx.createStereoPanner(); p.pan.value = clamp(pan, -0.85, 0.85); p.connect(dry); p.connect(revSend);
+  return p;
+}
+function playBar(k, when, gain, pan) {
+  if (!actx) return;
+  const f = FREQ[k], bass = f < 200;
+  const out = actx.createGain(); out.gain.value = gain * (bass ? 0.30 : 0.21) * Math.pow(262 / f, 0.12);
+  out.connect(voice(null, when, pan));
+  const T = bass ? 6.0 : clamp(3.8 * Math.pow(262 / f, 0.5), 1.8, 5);
+  const parts = bass
+    ? [[1, 1, T], [1.0011, 0.32, T * 0.95], [2.0, 0.07, T * 0.4], [3.98, 0.12, T * 0.25], [9.9, 0.025, T * 0.07]]
+    : [[1, 1, T], [1.0016, 0.28, T * 0.9], [3.98, 0.24, T * 0.27], [9.92, 0.06, T * 0.08], [2.756, 0.025, T * 0.12]];
+  for (const [ratio, amp, t60] of parts) {
+    const fr = f * ratio; if (fr > 15000) continue;
+    const o = actx.createOscillator(); o.type = 'sine'; o.frequency.value = fr;
+    const g = actx.createGain();
+    g.gain.setValueAtTime(0, when); g.gain.linearRampToValueAtTime(amp, when + 0.0025);
+    g.gain.setTargetAtTime(0, when + 0.0025, t60 / 6.9);
+    o.connect(g); g.connect(out); o.start(when); o.stop(when + t60 + 0.2);
+  }
+  // the glassy tick of the marble on metal
+  const n = actx.createBufferSource(); n.buffer = noiseBuf;
+  const bp = actx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 5200 + Math.random() * 900; bp.Q.value = 1.4;
+  const ng = actx.createGain(); ng.gain.setValueAtTime(0, when); ng.gain.linearRampToValueAtTime(0.16, when + 0.0008); ng.gain.setTargetAtTime(0, when + 0.0008, 0.006);
+  n.connect(bp); bp.connect(ng); ng.connect(out); n.start(when, Math.random() * 1.5); n.stop(when + 0.08);
+}
+function blip(when, f, dec, gain, pan, noiseF) {
+  if (!actx) return;
+  const out = actx.createGain(); out.gain.value = gain; out.connect(voice(null, when, pan));
+  const o = actx.createOscillator(); o.frequency.value = f; const g = actx.createGain();
+  g.gain.setValueAtTime(0, when); g.gain.linearRampToValueAtTime(1, when + 0.001); g.gain.setTargetAtTime(0, when + 0.001, dec);
+  o.connect(g); g.connect(out); o.start(when); o.stop(when + dec * 8);
+  if (noiseF) {
+    const n = actx.createBufferSource(); n.buffer = noiseBuf; const bq = actx.createBiquadFilter(); bq.type = 'bandpass'; bq.frequency.value = noiseF; bq.Q.value = 1;
+    const ng = actx.createGain(); ng.gain.setValueAtTime(0.6, when); ng.gain.setTargetAtTime(0, when, 0.004);
+    n.connect(bq); bq.connect(ng); ng.connect(out); n.start(when, Math.random()); n.stop(when + 0.05);
+  }
+}
+const _pv = new V3();
+function panOf(p) { _pv.copy(p).applyMatrix4(camera.matrixWorldInverse); return clamp(_pv.x / 3.2, -0.8, 0.8); }
+function audioHeardNow() {
+  if (!actx) return 0;
+  const ts = actx.getOutputTimestamp ? actx.getOutputTimestamp() : null;
+  if (ts && ts.contextTime > 0 && ts.performanceTime > 0) return ts.contextTime + (performance.now() - ts.performanceTime) / 1000;
+  return actx.currentTime - (actx.outputLatency || actx.baseLatency || 0);
+}
+releaseHook = (k, tStrike, gain) => {
+  if (!actx || ffMode) return;
+  const when = audioStart + tStrike;
+  if (when < actx.currentTime - 0.05) return;
+  playBar(k, Math.max(when, actx.currentTime), gain * clamp(bars[k].vn / 3.2, 0.7, 1.2), panOf(bars[k].c));
+};
+strikeHook = (k, t, vn, gain) => {
+  const b = bars[k]; b.ts = t; b.amp = gain;
+  const L = strikeLights[slIdx++ % 3]; L.t = t; L.amp = gain; L.l.position.copy(b.c).addScaledVector(b.n, 0.16);
+};
+
+/* =====================================================================
+   CLOCK, START, LOOP
+   ===================================================================== */
+const veil = document.getElementById('veil');
+let started = false, ffMode = false, perfStart = 0, useAudioClock = false, lastTarget = 0;
+async function start() {
+  if (started) return; started = true;
+  veil.classList.add('gone');
+  try {
+    initAudio();
+    await actx.resume();
+    audioStart = actx.currentTime + 0.15;
+    master.gain.setValueAtTime(0, actx.currentTime); master.gain.linearRampToValueAtTime(1.15, actx.currentTime + 1.5);
+    useAudioClock = actx.state === 'running';
+  } catch (e) { console.warn('audio unavailable', e); }
+  perfStart = performance.now() / 1000;
+  sim.running = true;
+}
+window.addEventListener('pointerdown', start);
+window.addEventListener('keydown', e => { if (e.key === ' ' || e.key === 'Enter') start(); });
+if (window.__clicked) start();
+
+function simTarget() {
+  let t;
+  if (useAudioClock && actx && actx.state === 'running') t = audioHeardNow() - audioStart;
+  else t = performance.now() / 1000 - perfStart - 0.15;
+  t = Math.max(lastTarget, t); lastTarget = t; return t;
+}
+
+const tmpQ = new THREE.Quaternion();
+function spin(m, ang) { if (ang !== 0) { tmpQ.setFromAxisAngle(m.spinAxis, ang); m.mesh.quaternion.premultiply(tmpQ).normalize(); } }
+const _n = new V3(), _t = new V3();
+function updateMarbleVisuals(dtR) {
+  for (const m of marbles) {
+    if (m.mode === 'hidden') continue;
+    if (m.mode === 'track') {
+      const tr = m.track; tr.pos(m.s, m.pos);
+      tr.vec(tr.Nn, m.s, _n); tr.vec(tr.T, m.s, _t);
+      m.spinAxis.crossVectors(_n, _t).normalize(); m.spinRate = m.v / RM;
+    } else if (m.mode === 'lift') {
+      const y = liftY(m); m.pos.set(Math.cos(THETA_G) * LIFT_R, y, Math.sin(THETA_G) * LIFT_R);
+      m.spinAxis.set(-Math.sin(THETA_G), 0, Math.cos(THETA_G)); m.spinRate = -(sim.liftW * LEAD / TAU) / RM;
+    }
+    m.mesh.position.copy(m.pos);
+    spin(m, m.spinRate * dtR);
+  }
+}
+let lastFrame = performance.now() / 1000, clockT = 0, fxTokens = 4;
+const camTarget = new V3(0, 1.72, 0);
+function frame() {
+  const now = performance.now() / 1000; let dtR = Math.min(0.1, now - lastFrame); lastFrame = now; clockT += dtR;
+  const simT0 = sim.t;
+  if (sim.running) {
+    const target = simTarget();
+    let steps = Math.floor((target - sim.t) / DT);
+    steps = Math.min(steps, 360 * 2);
+    for (let i = 0; i < steps; i++) stepSim();
+  }
+  const dSim = sim.running ? sim.t - simT0 : 0;
+  // camera: an unhurried orbit
+  const ca = 0.6 + clockT * TAU / 120, cr = 6.9 + 0.5 * Math.sin(clockT * 0.043), ch = 2.95 + 0.7 * Math.sin(clockT * 0.031 + 1.2);
+  camera.position.set(Math.cos(ca) * cr, ch, Math.sin(ca) * cr);
+  camTarget.set(0, 1.5 + 0.12 * Math.sin(clockT * 0.027), 0);
+  const co = window.__camOverride; if (co) { camera.position.set(Math.cos(co.a) * co.r, co.h, Math.sin(co.a) * co.r); camTarget.set(co.tx || 0, co.ty, co.tz || 0); }
+  camera.lookAt(camTarget); camera.updateMatrixWorld();
+  // incidental sounds from the simulation
+  if (actx && !ffMode) {
+    const when = actx.currentTime + 0.005;
+    fxTokens = Math.min(4, fxTokens + dtR * 14);
+    for (const e of fx) {
+      if (fxTokens < 1) break;
+      fxTokens -= 1;
+      if (e.type === 'clack') { const p = e.track.pos(e.s, _v); blip(when, 3100 + Math.random() * 500, 0.012, clamp(e.v * 0.03, 0.004, 0.035), panOf(p), 6500); }
+      else if (e.type === 'tock') { _v.set(e.x, e.y, e.z); blip(when, 170 + Math.random() * 40, 0.035, clamp(e.v * 0.05, 0.01, 0.09), panOf(_v), 900); }
+      else if (e.type === 'click') { _v.set(e.x, e.y, e.z); blip(when, 3600 + Math.random() * 900, 0.01, clamp(e.v * 0.05, 0.004, 0.04), panOf(_v), 7000); }
+      else if (e.type === 'ting') { _v.set(e.x, e.y, e.z); blip(when, 2200 + Math.random() * 300, 0.03, clamp(e.v * 0.03, 0.003, 0.025), panOf(_v), 0); }
+      else if (e.type === 'exit') { blip(when, 2600, 0.008, 0.008, 0, 5000); }
+    }
+    // rolling hush
+    let roll = 0, rum = 0;
+    for (const m of marbles) { if (m.mode === 'track') roll += Math.abs(m.v); else if (m.mode === 'bowl') rum += Math.hypot(m.vel.x, m.vel.z); }
+    rollGain.gain.setTargetAtTime(clamp(roll * 0.0035, 0, 0.03), actx.currentTime, 0.08);
+    rumbleGain.gain.setTargetAtTime(clamp(rum * 0.02, 0, 0.09), actx.currentTime, 0.1);
+  }
+  fx.length = 0;
+  // visuals
+  updateMarbleVisuals(dSim);
+  screw.rotation.y = sim.liftA;
+  const T = sim.t;
+  for (let k = 0; k < N_ARMS; k++) {
+    const b = bars[k], age = T - b.ts;
+    if (age >= 0 && age < 8) {
+      b.mat.emissiveIntensity = b.amp * (1.6 * Math.exp(-age * 9) + 0.55 * Math.exp(-age * 1.4));
+      const wob = b.amp * 0.035 * Math.exp(-age * 5.5) * Math.sin(age * TAU * 9);
+      b.mesh.quaternion.copy(b.baseQ); b.mesh.rotateX(wob); b.mesh.rotateZ(wob * 0.3);
+      b.mesh.position.copy(b.basePos).addScaledVector(b.n, -0.006 * b.amp * Math.exp(-age * 14) * Math.cos(age * TAU * 7));
+    } else if (b.mat.emissiveIntensity !== 0) { b.mat.emissiveIntensity = 0; b.mesh.quaternion.copy(b.baseQ); b.mesh.position.copy(b.basePos); }
+  }
+  for (const L of strikeLights) { const age = T - L.t; L.l.intensity = age >= 0 && age < 4 ? L.amp * 1.1 * Math.exp(-age * 2.6) : 0; }
+  for (let k = 0; k < N_ARMS; k++) {
+    const age = T - gates[k].tOpen;
+    const o = age >= 0 ? sstep(0, 0.05, age) * (1 - sstep(0.12, 0.22, age)) : 0;
+    gateMeshes[k].rotation.z = o * 1.25;
+  }
+  dust.material.uniforms.time.value = clockT; window.__shaft.material.uniforms.time.value = clockT;
+  finish.uniforms.time.value = clockT;
+  finish.uniforms.fade.value = Math.min(1, clockT / 2.5);
+  composer.render();
+  requestAnimationFrame(frame);
+}
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight); composer.setSize(innerWidth, innerHeight);
+});
+camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+updateMarbleVisuals(0);
+requestAnimationFrame(frame);
+
+// diagnostics for testing
+window.__mm = {
+  stats, sim, barInfo, bars, ramps, rels, T_HIT, travel, queues, buffer, liftList,
+  info: () => ({ gateY: GATE_Y, lip: barInfo.map(b => b.lipY.toFixed(2)), T: T_HIT.map(t => t.toFixed(3)), land: barInfo.map(b => b.land.toFixed(2) + b.mode), marbles: marbles.length, travel: travel.map(t => t.toFixed(2)), bars: bars.map(b => [Math.hypot(b.c.x, b.c.z).toFixed(2), b.c.y.toFixed(2), b.vn.toFixed(2)]) }),
+  async renderAudio(sec) {
+    const oc = new OfflineAudioContext(2, 44100 * sec, 44100); initAudio(oc); master.gain.value = 0.9;
+    for (const r of rels) if (r.t < sec - 1) playBar(r.bar, r.t, r.gain, 0);
+    const buf = await oc.startRendering(); const d = buf.getChannelData(0);
+    let pk = 0, ss = 0; for (let i = 0; i < d.length; i++) { const v = Math.abs(d[i]); if (v > pk) pk = v; ss += v * v; }
+    const out = new Int16Array(d.length * 2); const d1 = buf.getChannelData(1);
+    for (let i = 0; i < d.length; i++) { out[2 * i] = clamp(d[i], -1, 1) * 32767; out[2 * i + 1] = clamp(d1[i], -1, 1) * 32767; }
+    let bin = ''; const u8 = new Uint8Array(out.buffer); for (let i = 0; i < u8.length; i += 32768) bin += String.fromCharCode.apply(null, u8.subarray(i, i + 32768));
+    actx = null;
+    return { peak: pk, rms: Math.sqrt(ss / d.length), pcm: btoa(bin) };
+  },
+  info2: () => renderer.info.render,
+  fastForward(sec) { ffMode = true; sim.running = false; const n = Math.round(sec / DT); for (let i = 0; i < n; i++) stepSim(); fx.length = 0; ffMode = false; return { ...stats, t: sim.t, buffer: buffer.length, lift: liftList.length, q: queues.map(q => q.length), modes: marbles.reduce((a, m) => (a[m.mode] = (a[m.mode] || 0) + 1, a), {}) }; },
+};
+</script>
+</body>
+</html>
