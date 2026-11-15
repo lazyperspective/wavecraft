@@ -10,6 +10,8 @@
 // right moment. Afterwards the audio is rendered offline and muxed with the frames.
 //
 // usage: node record.cjs <page.html> <out.mp4> [--pre 3] [--dur 60] [--fps 30] [--w 1280] [--h 720]
+//        add --from F --to T to record only frames [F,T) (earlier frames are fast-forwarded without drawing)
+//        add --audio-only <existing.mp4> to re-render just the sound (draw calls stubbed) onto existing frames
 
 const { chromium } = require('playwright');
 const { spawn } = require('child_process');
@@ -22,10 +24,14 @@ const [htmlPath, outPath] = argv;
 const PRE = opt('pre', 3), DUR = opt('dur', 60), FPS = opt('fps', 30), W = opt('w', 1280), H = opt('h', 720);
 const TOTAL = PRE + DUR;
 const SR = 48000;
+const FROM = opt('from', 0); const TO_ARG = opt('to', 0); // chunked recording: frames [from, to); no mux, keeps .video.mp4 + .wav
+const ai = argv.indexOf('--audio-only'); const AUDIO_ONLY = ai >= 0 ? argv[ai + 1] : null; // existing silent/old video to re-mux
 
-const initScript = ({ maxSec, sr }) => {
+const initScript = ({ maxSec, sr, audioOnly }) => {
   let vt = 0;
-  const base = Date.now();
+  const base = 1767225600000; // fixed epoch: identical runs
+  let seed = 0x9e3779b9; // mulberry32: identical randomness in every run
+  Math.random = () => { seed = (seed + 0x6d2b79f5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
   performance.now = () => vt;
   Date.now = () => base + vt;
 
@@ -46,6 +52,17 @@ const initScript = ({ maxSec, sr }) => {
   window.clearTimeout = window.clearInterval = (id) => timers.delete(id);
 
   const ctxs = [];
+  // An offline context applies every graph change before rendering starts, so a
+  // node disconnected after its note ends would be silent for the whole render.
+  // Keep everything connected; finished sources simply output silence.
+  AudioNode.prototype.disconnect = function () {};
+  // while fast-forwarding (audio-only, or before a chunk's first frame) skip the expensive draw calls
+  let drawOn = !audioOnly;
+  for (const C of [WebGLRenderingContext, WebGL2RenderingContext])
+    for (const m of ['drawArrays', 'drawElements', 'drawArraysInstanced', 'drawElementsInstanced', 'drawRangeElements']) {
+      const orig = C.prototype[m];
+      if (orig) C.prototype[m] = function (...a) { if (drawOn) return orig.apply(this, a); };
+    }
   const animStart = new WeakMap();
   function FakeAudioContext() {
     const c = new OfflineAudioContext({ numberOfChannels: 2, length: Math.ceil(sr * maxSec), sampleRate: sr });
@@ -87,6 +104,7 @@ const initScript = ({ maxSec, sr }) => {
       }
     },
     now: () => vt,
+    setDraw(on) { drawOn = on; },
     contexts: () => ctxs.length,
     async renderAudio(totalSec) {
       const len = Math.ceil(totalSec * sr);
@@ -128,27 +146,33 @@ const initScript = ({ maxSec, sr }) => {
   const errors = [];
   page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
   page.on('pageerror', (e) => errors.push(String(e)));
-  await page.addInitScript(initScript, { maxSec: TOTAL + 15, sr: SR });
+  await page.addInitScript(initScript, { maxSec: TOTAL + 15, sr: SR, audioOnly: !!AUDIO_ONLY });
   await page.goto('file://' + path.resolve(htmlPath), { waitUntil: 'load' });
   await page.waitForTimeout(1500); // let CDN modules finish (real time; the virtual clock is paused)
 
   const cdp = await page.context().newCDPSession(page);
-  const ff = spawn('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'image2pipe', '-framerate', String(FPS), '-c:v', 'mjpeg', '-i', '-',
+  if (AUDIO_ONLY) fs.copyFileSync(AUDIO_ONLY, tmp + '.src.mp4');
+  const ff = AUDIO_ONLY ? null : spawn('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'image2pipe', '-framerate', String(FPS), '-c:v', 'mjpeg', '-i', '-',
     '-c:v', 'libx264', '-preset', 'medium', '-crf', '17', '-pix_fmt', 'yuv420p', tmp + '.video.mp4'], { stdio: ['pipe', 'inherit', 'inherit'] });
 
-  const dt = 1000 / FPS, n = Math.round(TOTAL * FPS), clickAt = Math.round(PRE * FPS);
+  const dt = 1000 / FPS, n = TO_ARG || Math.round(TOTAL * FPS), clickAt = Math.round(PRE * FPS);
+  const CHUNK = FROM > 0 || TO_ARG > 0;
+  if (FROM > 0) await page.evaluate(() => window.__vt.setDraw(false));
   const t0 = Date.now();
   let lastReal = Date.now();
   for (let i = 0; i < n; i++) {
     if (i === clickAt) { await page.mouse.click(W / 2, H / 2); await page.evaluate(() => document.body.click()).catch(() => {}); }
+    if (FROM > 0 && i === FROM - 1 && !AUDIO_ONLY) await page.evaluate(() => window.__vt.setDraw(true)); // draw the frame before, so effects with history (trails, bloom) are warm
     await page.evaluate((d) => window.__vt.step(d), dt);
-    const { data } = await cdp.send('Page.captureScreenshot', { format: 'jpeg', quality: 93 });
-    if (!ff.stdin.write(Buffer.from(data, 'base64'))) await new Promise((r) => ff.stdin.once('drain', r));
+    if (ff && i >= FROM) {
+      const { data } = await cdp.send('Page.captureScreenshot', { format: 'jpeg', quality: 93 });
+      if (!ff.stdin.write(Buffer.from(data, 'base64'))) await new Promise((r) => ff.stdin.once('drain', r));
+    }
     const now = Date.now(), real = now - lastReal; lastReal = now;
     if (i % (FPS * 5) === 0) console.log(`[${path.basename(outPath)}] frame ${i}/${n}  ${(real).toFixed(0)}ms/frame  elapsed ${((now - t0) / 1000).toFixed(0)}s`);
   }
-  ff.stdin.end();
-  await new Promise((r) => ff.on('close', r));
+  if (ff) { ff.stdin.end(); await new Promise((r) => ff.on('close', r)); }
+  else fs.renameSync(tmp + '.src.mp4', tmp + '.video.mp4');
 
   const info = await page.evaluate((s) => window.__vt.renderAudio(s), TOTAL);
   console.log('audio', info, 'contexts', await page.evaluate(() => window.__vt.contexts()));
@@ -156,9 +180,10 @@ const initScript = ({ maxSec, sr }) => {
   for (let o = 0; o < info.bytes; o += CH) chunks.push(Buffer.from(await page.evaluate(([a, b]) => window.__vt.wavChunk(a, b), [o, CH]), 'base64'));
   fs.writeFileSync(tmp + '.wav', Buffer.concat(chunks));
   await browser.close();
+  if (CHUNK) { console.log('chunk done', tmp + '.video.mp4', tmp + '.wav', 'errors:', errors.slice(0, 10)); return; }
 
   await new Promise((res, rej) => spawn('ffmpeg', ['-y', '-loglevel', 'error', '-i', tmp + '.video.mp4', '-i', tmp + '.wav',
-    '-c:v', 'copy', '-c:a', 'aac', '-b:a', '256k', '-shortest', outPath], { stdio: 'inherit' }).on('close', (c) => (c ? rej(c) : res())));
+    '-map', '0:v', '-map', '1:a', '-c:v', 'copy', '-c:a', 'aac', '-b:a', '256k', '-shortest', outPath], { stdio: 'inherit' }).on('close', (c) => (c ? rej(c) : res())));
   fs.unlinkSync(tmp + '.video.mp4');
   console.log('done', outPath, 'errors:', errors.slice(0, 10));
 })();
