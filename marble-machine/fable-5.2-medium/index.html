@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Glass &amp; Brass</title>
+<style>
+  html,body{margin:0;height:100%;background:#0a0807;overflow:hidden;cursor:pointer}
+  canvas{display:block;position:fixed;inset:0;width:100%;height:100%}
+  #vig{position:fixed;inset:0;pointer-events:none;
+    background:radial-gradient(ellipse at 50% 46%,rgba(0,0,0,0) 48%,rgba(4,2,1,.5) 82%,rgba(2,1,0,.86) 100%)}
+  #ui{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;
+    pointer-events:none;color:#ead9bd;font-family:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;
+    text-align:center;transition:opacity 2.2s ease;padding-bottom:9vh;box-sizing:border-box}
+  #ui h1{font-weight:400;font-style:italic;font-size:clamp(30px,4.6vw,62px);margin:0;letter-spacing:.02em;
+    text-shadow:0 2px 30px rgba(0,0,0,.8)}
+  #ui .sub{margin-top:.7em;font-size:clamp(11px,1.05vw,14px);letter-spacing:.42em;text-transform:uppercase;opacity:.62}
+  #ui .go{margin-top:3.2em;font-size:clamp(11px,1vw,13px);letter-spacing:.5em;text-transform:uppercase;
+    animation:breathe 3.4s ease-in-out infinite}
+  #ui .go:before,#ui .go:after{content:"";display:inline-block;width:2.6em;height:1px;background:#ead9bd;opacity:.5;
+    vertical-align:middle;margin:0 1.2em}
+  @keyframes breathe{0%,100%{opacity:.35}50%{opacity:.95}}
+  #cap{position:fixed;left:0;right:0;bottom:5vh;text-align:center;pointer-events:none;color:#ead9bd;opacity:0;
+    font-family:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;font-style:italic;
+    font-size:clamp(13px,1.3vw,18px);letter-spacing:.06em;transition:opacity 2.5s ease;text-shadow:0 1px 14px #000}
+</style>
+<script type="importmap">
+{"imports":{
+  "three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+}}
+</script>
+</head>
+<body>
+<div id="vig"></div>
+<div id="ui"><h1>Glass &amp; Brass</h1><div class="sub">a round for four marbles</div><div class="go">click to begin</div></div>
+<div id="cap">Fr&egrave;re Jacques &mdash; in canon</div>
+<script type="module">
+import * as THREE from 'three';
+import {EffectComposer} from 'three/addons/postprocessing/EffectComposer.js';
+import {RenderPass} from 'three/addons/postprocessing/RenderPass.js';
+import {UnrealBloomPass} from 'three/addons/postprocessing/UnrealBloomPass.js';
+import {OutputPass} from 'three/addons/postprocessing/OutputPass.js';
+
+/* ------------------------------------------------------------------ constants */
+const BEAT = 0.52, G = 9.8, GR = 7.0, R = 0.09, VH = 1.0;
+const TAU = Math.PI * 2;
+const NM = 4, SLOT = 8 * BEAT, TLOOP = 56 * BEAT;
+const T_LIFT = 12 * BEAT, P_ROT = BEAT * 4 / 3;
+const Y = new THREE.Vector3(0, 1, 0);
+const V = (x, y, z) => new THREE.Vector3(x, y, z);
+const mod = (a, n) => ((a % n) + n) % n;
+const smooth = x => { x = Math.min(1, Math.max(0, x)); return x * x * (3 - 2 * x); };
+
+// Frère Jacques: [scale semitone, beats]
+const PH = [
+  [[0,1],[2,1],[4,1],[0,1]],
+  [[4,1],[5,1],[7,2]],
+  [[7,.5],[9,.5],[7,.5],[5,.5],[4,1],[0,1]],
+  [[0,1],[-5,1],[0,2]]
+];
+const NOTES = [];
+{ let b = 0; for (const p of PH) for (let k = 0; k < 2; k++) for (const [n, d] of p) { NOTES.push({ n, d, b }); b += d; } }
+const ROOT = 466.16; // Bb4
+const freqOf = n => ROOT * Math.pow(2, n / 12);
+
+/* ------------------------------------------------------------------ path design */
+// conical spiral of bars
+const r0 = 0.8, kS = 0.14, yTop0 = 3.0, SLOPE = 0.06;
+const SN = 4000, sTab = new Float32Array(SN + 1), TH_MAX = 13;
+for (let i = 1; i <= SN; i++) { const th = i / SN * TH_MAX, r = r0 + kS * th; sTab[i] = sTab[i - 1] + Math.hypot(r, kS) * TH_MAX / SN; }
+function thetaOfS(s) {
+  if (s <= 0) return s / r0;
+  let lo = 0, hi = SN;
+  while (hi - lo > 1) { const m = (lo + hi) >> 1; if (sTab[m] < s) lo = m; else hi = m; }
+  return (lo + (s - sTab[lo]) / (sTab[hi] - sTab[lo])) * TH_MAX / SN;
+}
+function spiralXZ(s) { const th = thetaOfS(s), r = r0 + kS * th; return { x: r * Math.cos(th), z: r * Math.sin(th), th, r }; }
+function spiralTan(s) { const a = spiralXZ(s - 0.01), b = spiralXZ(s + 0.01); return V(b.x - a.x, 0, b.z - a.z).normalize(); }
+
+const BAR_TH = 0.036, BAR_W = 0.17;
+const bars = NOTES.map(nt => {
+  const s = VH * BEAT * nt.b, p = spiralXZ(s), yTop = yTop0 - SLOPE * nt.b;
+  return { ...nt, s, th: p.th, top: V(p.x, yTop, p.z), c: V(p.x, yTop + R, p.z), len: 0.42 * Math.sqrt(880 / freqOf(nt.n)), glow: 0, hitT: -9, col: new THREE.Color() };
+});
+const lastBar = bars[bars.length - 1];
+
+function sampled(points, n = 700) {
+  const c = new THREE.CatmullRomCurve3(points, false, 'centripetal'); c.arcLengthDivisions = 4000;
+  const pts = c.getSpacedPoints(n), len = c.getLength();
+  return { pts, len, n,
+    at(s, out) { const f = Math.min(1, Math.max(0, s / len)) * n, i = Math.min(n - 1, Math.floor(f)); return (out || V()).lerpVectors(pts[i], pts[i + 1], f - i); },
+    slope(s) { const e = 0.02, a = this.at(Math.max(0, s - e)), b = this.at(Math.min(len, s + e)); return (b.y - a.y) / Math.max(1e-6, Math.min(len, s + e) - Math.max(0, s - e)); } };
+}
+const DT = 1 / 240;
+function simRoll(curve, s0, v0, mu, vmin, pre = 0) {
+  const tab = []; let s = s0, v = v0, t = 0;
+  while (s < curve.len && t < 30) { tab.push(s); if (t >= pre) { v += (-GR * curve.slope(s) - mu) * DT; if (v < vmin) v = vmin; } s += v * DT; t += DT; }
+  tab.push(curve.len);
+  return { tab, T: (tab.length - 1) * DT, vEnd: v, s(tt) { const f = Math.min(tab.length - 1, Math.max(0, tt / DT)), i = Math.min(tab.length - 2, Math.floor(f)); return tab[i] + (tab[i + 1] - tab[i]) * (f - i); } };
+}
+
+// exit: catch track spiralling in to the lift
+const rL = 0.215, yB = 0.42, T0 = 0.28, T_XF = 0.5, AE_TARGET = 3.3, H_ENTRY = 0.2;
+const tEnd = spiralTan(lastBar.s), t0v = spiralTan(0);
+const X0 = lastBar.c.clone().addScaledVector(tEnd, VH * T_XF); X0.y = lastBar.c.y - 0.3;
+const thX = Math.atan2(X0.z, X0.x), rX = Math.hypot(X0.x, X0.z);
+const yE = bars[0].c.y + 0.5 * G * T0 * T0, yT = yE + H_ENTRY;
+let distE = 1.4 * T0;
+let thEguess = Math.atan2(bars[0].c.z - t0v.z * distE, bars[0].c.x - t0v.x * distE);
+let A_X = mod(thEguess - AE_TARGET - thX, TAU); if (A_X < 2.6) A_X += TAU;
+const phiL = thX + A_X;
+const Lp = V(rL * Math.cos(phiL), yB, rL * Math.sin(phiL));
+const LEAD = 0.28;
+const exitC = (() => {
+  const pts = [X0.clone().addScaledVector(tEnd, -LEAD).setY(X0.y + 0.012), X0.clone()];
+  for (let u = 0.07; u < 0.955; u += 0.055) {
+    const a = thX + A_X * u, r = rX + (rL - rX) * Math.pow(u, 0.9), y = yB + (X0.y - yB) * Math.pow(1 - u, 1.7);
+    pts.push(V(r * Math.cos(a), y, r * Math.sin(a)));
+  }
+  pts.push(Lp.clone());
+  return sampled(pts, 900);
+})();
+const HB = [0.26, 0.13];
+const exitSim = simRoll(exitC, LEAD, VH, 0.5, 0.45, HB[0] + HB[1]);
+
+// entry: from lift top, round the column, out to the first bar
+let entryC, entrySim, E;
+for (let it = 0; it < 5; it++) {
+  E = bars[0].c.clone().addScaledVector(t0v, -distE); E.y = yE;
+  const thE = Math.atan2(E.z, E.x), rE = Math.hypot(E.x, E.z);
+  let A = mod(thE - phiL, TAU); if (A < 1.8) A += TAU;
+  const pts = [V(Lp.x, yT - 0.05, Lp.z), V((rL + 0.07) * Math.cos(phiL + 0.14), yT, (rL + 0.07) * Math.sin(phiL + 0.14))];
+  const a0 = 0.14 / A;
+  for (let u = a0 + 0.09; u < 0.9; u += 0.08) {
+    const a = phiL + A * u, r = rL + 0.07 + (rE - rL - 0.07) * Math.pow((u - a0) / (1 - a0), 1.25), y = yE + H_ENTRY * Math.pow(1 - u, 2.2) / Math.pow(1 - a0, 2.2);
+    pts.push(V(r * Math.cos(a), y, r * Math.sin(a)));
+  }
+  pts.push(E.clone().addScaledVector(t0v, -0.22), E.clone());
+  entryC = sampled(pts, 700);
+  entrySim = simRoll(entryC, 0, 0, 0.12, 0, 0);
+  distE = 0; // placeholder, set below
+  const vl = (yT - 0.05 - yB) / T_LIFT;
+  entrySim = simRoll(entryC, 0, vl, 0.12, vl * 0.9, 0);
+  distE = entrySim.vEnd * T0;
+}
+const V_LIFT = (yT - 0.05 - yB) / T_LIFT, PITCH = V_LIFT * P_ROT;
+
+// timeline (seconds within loop)
+const tB = T_LIFT, tC = tB + entrySim.T, tD = tC + T0;
+const tNote = bars.map(b => tD + b.b * BEAT);
+const tE = tNote[tNote.length - 1], tF = tE + T_XF, tG = tF + exitSim.T;
+const WAIT = TLOOP - tG;
+if (WAIT < 0) console.warn('timeline overrun', WAIT);
+const EVENTS = [];
+bars.forEach((b, i) => EVENTS.push({ t: tNote[i], bar: i }));
+EVENTS.push({ t: tF, tick: 0.9 }, { t: tF + HB[0], tick: 0.5 }, { t: tF + HB[0] + HB[1], tick: 0.25 }, { t: tG, tick: 0.6, tock: true });
+
+const _a = V(), _b = V();
+function hop(p0, p1, T, t, out) {
+  const f = t / T, vy = (p1.y - p0.y + 0.5 * G * T * T) / T;
+  out.set(p0.x + (p1.x - p0.x) * f, p0.y + vy * t - 0.5 * G * t * t, p0.z + (p1.z - p0.z) * f); return out;
+}
+// returns true if rolling on something
+function pathPos(ph, out) {
+  if (ph < tB) { out.set(Lp.x, yB + V_LIFT * ph, Lp.z); return false; }
+  if (ph < tC) { entryC.at(entrySim.s(ph - tB), out); return true; }
+  if (ph < tD) { hop(E, bars[0].c, T0, ph - tC, out); return false; }
+  if (ph < tE) {
+    let lo = 0, hi = bars.length - 1;
+    while (hi - lo > 1) { const m = (lo + hi) >> 1; if (tNote[m] <= ph) lo = m; else hi = m; }
+    hop(bars[lo].c, bars[lo + 1].c, tNote[lo + 1] - tNote[lo], ph - tNote[lo], out); return false;
+  }
+  if (ph < tF) { hop(lastBar.c, X0, T_XF, ph - tE, out); return false; }
+  if (ph < tG) {
+    const t = ph - tF; exitC.at(exitSim.s(t), out);
+    let tt = t, air = false;
+    for (const h of HB) { if (tt < h) { out.y += 0.5 * G * tt * (h - tt); air = true; break; } tt -= h; }
+    return !air;
+  }
+  out.copy(Lp); return false;
+}
+
+/* ------------------------------------------------------------------ renderer & scene */
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+renderer.setSize(innerWidth, innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.18;
+renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.prepend(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0a0807);
+scene.fog = new THREE.FogExp2(0x0a0807, 0.018);
+const camera = new THREE.PerspectiveCamera(34, innerWidth / innerHeight, 0.1, 80);
+
+// procedural studio environment for reflections
+{
+  const es = new THREE.Scene();
+  es.add(new THREE.Mesh(new THREE.SphereGeometry(30, 32, 16), new THREE.MeshBasicMaterial({ color: 0x15100c, side: THREE.BackSide })));
+  const panel = (w, h, pos, rgb) => { const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ side: THREE.DoubleSide })); m.material.color.setRGB(...rgb); m.position.set(...pos); m.lookAt(0, 1.5, 0); es.add(m); };
+  panel(9, 9, [2, 13, 3], [7, 5.6, 3.9]);
+  panel(5, 9, [-14, 5, 4], [1.6, 2.1, 3.2]);
+  panel(3, 6, [13, 4, -6], [5, 3.2, 1.6]);
+  panel(8, 1.2, [0, 2.5, -15], [3.5, 2.4, 1.4]);
+  panel(1.5, 1.5, [8, 7, 10], [14, 11, 8]);
+  panel(1.2, 1.2, [-6, 9, -9], [9, 9, 11]);
+  const fl = new THREE.Mesh(new THREE.CircleGeometry(28, 32), new THREE.MeshBasicMaterial({ color: 0x2a190e })); fl.rotation.x = -Math.PI / 2; fl.position.y = -2; es.add(fl);
+  const pm = new THREE.PMREMGenerator(renderer);
+  scene.environment = pm.fromScene(es, 0.03).texture;
+}
+
+// lights
+const key = new THREE.SpotLight(0xffe2bc, 430, 30, 0.5, 0.85, 2);
+key.position.set(4.5, 10.5, 5.5); key.target.position.set(0, 1.2, 0);
+key.castShadow = true; key.shadow.mapSize.set(2048, 2048); key.shadow.bias = -0.00025; key.shadow.normalBias = 0.012; key.shadow.radius = 5;
+key.shadow.camera.near = 4; key.shadow.camera.far = 22;
+scene.add(key, key.target);
+scene.add(new THREE.HemisphereLight(0x8c9cc0, 0x2c1a0e, 0.32));
+const rim = new THREE.DirectionalLight(0x9fb9ff, 0.45); rim.position.set(-6, 4.5, -7); scene.add(rim);
+const warm = new THREE.PointLight(0xff9a50, 14, 14, 2); warm.position.set(-4.5, 2.2, 5); scene.add(warm);
+
+// textures
+function woodTex(base, dark, light, seed = 1) {
+  const c = document.createElement('canvas'); c.width = c.height = 512; const g = c.getContext('2d');
+  let s = seed * 9301 + 7; const rnd = () => (s = (s * 16807) % 2147483647) / 2147483647;
+  g.fillStyle = base; g.fillRect(0, 0, 512, 512);
+  for (let i = 0; i < 300; i++) {
+    const y = rnd() * 512, amp = 2 + rnd() * 7, fr = 0.004 + rnd() * 0.012, phs = rnd() * 9;
+    g.strokeStyle = rnd() < 0.62 ? dark : light; g.globalAlpha = 0.05 + rnd() * 0.2; g.lineWidth = 0.5 + rnd() * 2.4;
+    g.beginPath(); for (let x = 0; x <= 512; x += 8) { const yy = y + Math.sin(x * fr + phs) * amp + Math.sin(x * fr * 3.1 + phs) * amp * 0.25; x ? g.lineTo(x, yy) : g.moveTo(x, yy); } g.stroke();
+  }
+  g.globalAlpha = 1;
+  const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8; return t;
+}
+const walnutT = woodTex('#553722', '#24130a', '#86603c', 3);
+const tableT = woodTex('#2e2118', '#120a06', '#4a3626', 11); tableT.repeat.set(5, 5);
+const mapleT = woodTex('#9c7038', '#5e3d1c', '#c9a05c', 5);
+
+// materials
+const brass = new THREE.MeshStandardMaterial({ color: 0xc79c52, metalness: 1, roughness: 0.27, envMapIntensity: 1.15 });
+const brassDark = new THREE.MeshStandardMaterial({ color: 0x9a7438, metalness: 1, roughness: 0.38 });
+const walnut = new THREE.MeshPhysicalMaterial({ map: walnutT, roughness: 0.55, clearcoat: 0.3, clearcoatRoughness: 0.45, envMapIntensity: 0.6 });
+const maple = new THREE.MeshPhysicalMaterial({ map: mapleT, roughness: 0.5, clearcoat: 0.45, clearcoatRoughness: 0.35, envMapIntensity: 0.7 });
+const felt = new THREE.MeshStandardMaterial({ color: 0x1b1512, roughness: 0.95 });
+
+const machine = new THREE.Group(); scene.add(machine);
+const shadow = m => { m.castShadow = true; m.receiveShadow = true; return m; };
+
+// table & plinth
+{
+  const table = new THREE.Mesh(new THREE.CylinderGeometry(6.6, 6.5, 0.16, 128), new THREE.MeshStandardMaterial({ map: tableT, roughness: 0.62, envMapIntensity: 0.4 }));
+  table.position.y = -0.28; table.receiveShadow = true; scene.add(table);
+  const edge = new THREE.Mesh(new THREE.TorusGeometry(6.6, 0.02, 8, 200), brassDark); edge.rotation.x = Math.PI / 2; edge.position.y = -0.2; scene.add(edge);
+  // the room: a dim wall wash far behind
+  const room = new THREE.Mesh(new THREE.SphereGeometry(40, 48, 24), new THREE.ShaderMaterial({ side: THREE.BackSide, depthWrite: false, fog: false,
+    vertexShader: 'varying vec3 vp; void main(){ vp = position; gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.0); }',
+    fragmentShader: `varying vec3 vp; void main(){ vec3 d = normalize(vp); float h = d.y;
+      float band = exp(-pow((h-0.10)/0.20,2.0)); float az = 0.55+0.45*sin(atan(d.z,d.x)*2.0+0.6);
+      vec3 c = vec3(0.012,0.009,0.008) + vec3(0.085,0.05,0.026)*band*az + vec3(0.012,0.016,0.028)*band*(1.0-az);
+      c *= smoothstep(-0.25,0.02,h)*0.85+0.15; gl_FragColor = vec4(c,1.0); }` }));
+  scene.add(room);
+  walnutT.repeat.set(3, 3);
+  const pl = shadow(new THREE.Mesh(new THREE.CylinderGeometry(2.92, 2.98, 0.2, 128), walnut)); pl.position.y = -0.1; machine.add(pl);
+  const lip = new THREE.Mesh(new THREE.TorusGeometry(2.92, 0.016, 10, 160), brass); lip.rotation.x = Math.PI / 2; lip.position.y = 0; machine.add(lip);
+  const inlay = new THREE.Mesh(new THREE.RingGeometry(2.62, 2.645, 128), brass); inlay.rotation.x = -Math.PI / 2; inlay.position.y = 0.0015; machine.add(inlay);
+}
+
+function cylBetween(a, b, r, mat, seg = 10) {
+  const d = _a.subVectors(b, a), L = d.length();
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, L, seg), mat);
+  m.position.copy(a).addScaledVector(d, 0.5); m.quaternion.setFromUnitVectors(Y, d.clone().normalize()); return shadow(m);
+}
+// keep-out sampling for posts
+const keepOut = [];
+function nearTrack(x, z, yTop) { for (const p of keepOut) if (p.y < yTop - 0.05 && Math.hypot(p.x - x, p.z - z) < 0.19) return true; return Math.hypot(x, z) < 0.42; }
+function post(top, r = 0.016) {
+  machine.add(cylBetween(V(top.x, 0, top.z), top, r, brass, 8));
+  const f = shadow(new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.055, 0.03, 16), brass)); f.position.set(top.x, 0.015, top.z); machine.add(f);
+}
+
+// rail tracks
+function frameAt(curve, s) {
+  const p = curve.at(s), a = curve.at(Math.max(0, s - 0.02)), b = curve.at(Math.min(curve.len, s + 0.02));
+  const T = b.sub(a).normalize(), N = V().crossVectors(T, Y).normalize(), U = V().crossVectors(N, T).normalize();
+  return { p, T, N, U };
+}
+function buildTrack(curve, sA, sB, postEvery, postPhase) {
+  const L = [], Rr = [], n = Math.ceil((sB - sA) / 0.04);
+  for (let i = 0; i <= n; i++) {
+    const f = frameAt(curve, sA + (sB - sA) * i / n);
+    L.push(f.p.clone().addScaledVector(f.N, 0.055).addScaledVector(f.U, -0.089));
+    Rr.push(f.p.clone().addScaledVector(f.N, -0.055).addScaledVector(f.U, -0.089));
+    keepOut.push(f.p.clone());
+  }
+  for (const pts of [L, Rr]) {
+    machine.add(shadow(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), n * 2, 0.0115, 8), brass)));
+    for (const e of [pts[0], pts[pts.length - 1]]) { const c = new THREE.Mesh(new THREE.SphereGeometry(0.0115, 8, 6), brass); c.position.copy(e); machine.add(c); }
+  }
+  const step = Math.round(0.3 / 0.04);
+  const ties = [];
+  for (let i = 2; i <= n - 1; i += step) {
+    const a = L[i].clone(), b = Rr[i].clone(), mid = a.clone().add(b).multiplyScalar(0.5); mid.y -= 0.03;
+    machine.add(cylBetween(a, mid, 0.007, brassDark, 6), cylBetween(mid, b, 0.007, brassDark, 6));
+    ties.push({ mid, s: sA + (sB - sA) * i / n });
+  }
+  return ties;
+}
+const exitRailEnd = (() => { let s = exitC.len; while (s > 0 && Math.hypot(exitC.at(s).x, exitC.at(s).z) < 0.4) s -= 0.02; return s; })();
+const entryRailStart = (() => { let s = 0; while (s < entryC.len && Math.hypot(entryC.at(s).x, entryC.at(s).z) < 0.34) s += 0.02; return s; })();
+const exitTies = buildTrack(exitC, 0, exitRailEnd);
+const entryTies = buildTrack(entryC, entryRailStart, entryC.len);
+
+// ribbon of wood carrying the bars
+const RIB_W = 0.42, RIB_T = 0.05;
+const ribTopAt = s => yTop0 - SLOPE * (s / (VH * BEAT)) - BAR_TH - 0.034;
+{
+  const sA = -0.24, sB = lastBar.s + 0.24, n = 520;
+  const pos = [], uv = [], idx = [];
+  const ring = [];
+  for (let i = 0; i <= n; i++) {
+    const s = sA + (sB - sA) * i / n, p = spiralXZ(s), t = spiralTan(s), N = V(t.z, 0, -t.x); // outward-ish
+    const yt = ribTopAt(s), c = V(p.x, 0, p.z);
+    const hw = RIB_W / 2;
+    ring.push([c.clone().addScaledVector(N, -hw).setY(yt), c.clone().addScaledVector(N, hw).setY(yt), c.clone().addScaledVector(N, hw).setY(yt - RIB_T), c.clone().addScaledVector(N, -hw).setY(yt - RIB_T), s]);
+  }
+  const faces = [[0, 1, 0, 1], [1, 2, 0.0, 0.14], [2, 3, 0, 1], [3, 0, 0.0, 0.14]];
+  for (const [a, b, va, vb] of faces) {
+    const base = pos.length / 3;
+    for (let i = 0; i <= n; i++) { const r = ring[i]; pos.push(r[a].x, r[a].y, r[a].z, r[b].x, r[b].y, r[b].z); uv.push(r[4] * 0.45, va, r[4] * 0.45, vb); }
+    for (let i = 0; i < n; i++) { const k = base + i * 2; idx.push(k, k + 1, k + 2, k + 1, k + 3, k + 2); }
+  }
+  for (const i of [0, n]) { const r = ring[i], base = pos.length / 3; for (let k = 0; k < 4; k++) { pos.push(r[k].x, r[k].y, r[k].z); uv.push(k % 2, k > 1 ? 0.2 : 0); } i === 0 ? idx.push(base, base + 1, base + 2, base, base + 2, base + 3) : idx.push(base, base + 2, base + 1, base, base + 3, base + 2); }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); g.setIndex(idx); g.computeVertexNormals();
+  const ribMat = maple.clone(); ribMat.side = THREE.DoubleSide;
+  machine.add(shadow(new THREE.Mesh(g, ribMat)));
+}
+
+// bars
+const barGeoCache = {};
+function barGeo(len) {
+  const key = len.toFixed(3); if (barGeoCache[key]) return barGeoCache[key];
+  const w = BAR_W, r = 0.022, hl = len / 2, hw = w / 2, sh = new THREE.Shape();
+  sh.moveTo(-hl + r, -hw); sh.lineTo(hl - r, -hw); sh.quadraticCurveTo(hl, -hw, hl, -hw + r); sh.lineTo(hl, hw - r); sh.quadraticCurveTo(hl, hw, hl - r, hw);
+  sh.lineTo(-hl + r, hw); sh.quadraticCurveTo(-hl, hw, -hl, hw - r); sh.lineTo(-hl, -hw + r); sh.quadraticCurveTo(-hl, -hw, -hl + r, -hw);
+  const b = 0.007, g = new THREE.ExtrudeGeometry(sh, { depth: BAR_TH - 2 * b, bevelEnabled: true, bevelThickness: b, bevelSize: b, bevelSegments: 3, curveSegments: 6 });
+  g.rotateX(-Math.PI / 2); g.computeBoundingBox(); g.translate(0, -g.boundingBox.max.y, 0);
+  return barGeoCache[key] = g;
+}
+const pinGeo = new THREE.CylinderGeometry(0.011, 0.011, 0.006, 10), padGeo = new THREE.CylinderGeometry(0.022, 0.022, 0.04, 10);
+const barBase = new THREE.MeshPhysicalMaterial({ color: 0xe0bb72, metalness: 1, roughness: 0.36, envMapIntensity: 1.05, emissive: 0x000000 });
+bars.forEach((b, i) => {
+  const g = new THREE.Group(); g.position.copy(b.top); g.rotation.y = -b.th;
+  const mat = barBase.clone(); mat.color.offsetHSL((b.n + 5) * 0.0022, 0, (b.n + 5) * 0.004);
+  const m = shadow(new THREE.Mesh(barGeo(b.len), mat)); g.add(m);
+  for (const sg of [-1, 1]) {
+    const pin = new THREE.Mesh(pinGeo, brassDark); pin.position.set(sg * b.len * 0.28, 0.002, 0); m.add(pin);
+    const pad = new THREE.Mesh(padGeo, felt); pad.position.set(sg * b.len * 0.28, -BAR_TH - 0.018, 0); g.add(pad);
+  }
+  machine.add(g); b.mesh = m; b.mat = mat;
+});
+
+// posts under the ribbon
+{
+  for (let s = 0.15; s < lastBar.s + 0.2; s += 1.5) {
+    let ss = s, p;
+    for (let k = 0; k < 8; k++) { p = spiralXZ(ss); if (!nearTrack(p.x, p.z, ribTopAt(ss))) break; ss += 0.17; }
+    post(V(p.x, ribTopAt(ss) - RIB_T, p.z), 0.02);
+  }
+  const tiePosts = (ties, every, off) => { for (let i = off; i < ties.length; i += every) { const t = ties[i]; let ok = true; for (const p of keepOut) if (p.y < t.mid.y - 0.25 && Math.hypot(p.x - t.mid.x, p.z - t.mid.z) < 0.19) ok = false; if (ok && Math.hypot(t.mid.x, t.mid.z) > 0.36) post(t.mid, 0.012); } };
+  tiePosts(exitTies, 3, 1); tiePosts(entryTies, 2, 0);
+}
+
+// the lift: a brass screw
+const screw = new THREE.Group(); machine.add(screw);
+const yBlade0 = 0.1, aPick = TAU * (yB - 0.089 - yBlade0) / PITCH, yBladeTop = yT - 0.05 - 0.089;
+{
+  const aMax = TAU * (yBladeTop - yBlade0) / PITCH, n = Math.ceil(aMax / 0.09), pos = [], idx = [];
+  const rin = 0.035, rout = 0.15;
+  for (let i = 0; i <= n; i++) { const a = aMax * i / n, y = yBlade0 + PITCH * a / TAU; pos.push(rin * Math.cos(a), y, rin * Math.sin(a), rout * Math.cos(a), y, rout * Math.sin(a)); if (i < n) { const k = i * 2; idx.push(k, k + 2, k + 1, k + 1, k + 2, k + 3); } }
+  const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx); g.computeVertexNormals();
+  const bm = brass.clone(); bm.side = THREE.DoubleSide; bm.roughness = 0.34;
+  screw.add(shadow(new THREE.Mesh(g, bm)));
+  class Helix extends THREE.Curve { getPoint(t, o = V()) { const a = aMax * t; return o.set(rout * Math.cos(a), yBlade0 + PITCH * a / TAU, rout * Math.sin(a)); } }
+  screw.add(shadow(new THREE.Mesh(new THREE.TubeGeometry(new Helix(), n * 2, 0.014, 8), brass)));
+  const shaft = shadow(new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, yBladeTop + 0.06, 20), brass)); shaft.position.y = (yBladeTop + 0.06) / 2; screw.add(shaft);
+  const fin = shadow(new THREE.Mesh(new THREE.SphereGeometry(0.062, 24, 16), brass)); fin.position.y = yBladeTop + 0.07; screw.add(fin);
+  // static parts
+  const house = shadow(new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.24, 0.09, 40), brassDark)); house.position.y = 0.045; machine.add(house);
+  const wd = shadow(new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.36, 0.03, 48), maple)); wd.position.y = 0.015; machine.add(wd);
+  const rods = [[phiL + 0.52, 0.225], [phiL + 0.12, 0.33], [phiL - 2.2, 0.2], [phiL + 2.6, 0.2]];
+  const ringY = [yBladeTop * 0.5, yBladeTop - 0.22];
+  rods.forEach(([a, r]) => machine.add(cylBetween(V(r * Math.cos(a), 0.03, r * Math.sin(a)), V(r * Math.cos(a), yT - 0.27, r * Math.sin(a)), 0.01, brass, 8)));
+}
+
+// marbles
+const MCOL = [0xffb040, 0x44d6c2, 0xff6f8e, 0x6ea2ff];
+const marbleGeo = new THREE.SphereGeometry(R, 48, 32), knotGeo = new THREE.TorusKnotGeometry(0.034, 0.011, 80, 8, 2, 3);
+const marbles = MCOL.map((c, j) => {
+  const g = new THREE.Group();
+  const col = new THREE.Color(c);
+  const glass = new THREE.MeshPhysicalMaterial({ color: 0xffffff, transmission: 1, thickness: 0.16, ior: 1.5, roughness: 0.02, metalness: 0, attenuationColor: col.clone().lerp(new THREE.Color(0xffffff), 0.55), attenuationDistance: 0.35, envMapIntensity: 1.6, specularIntensity: 1, clearcoat: 1, clearcoatRoughness: 0.03 });
+  const s = new THREE.Mesh(marbleGeo, glass); s.castShadow = true; g.add(s);
+  const k = new THREE.Mesh(knotGeo, new THREE.MeshStandardMaterial({ color: col, emissive: col, emissiveIntensity: 0.55, roughness: 0.35 })); g.add(k);
+  g.rotation.set(j * 1.3, j * 2.1, j * 0.7);
+  scene.add(g);
+  return { g, col, j, prev: V(), has: false, w: V(), q: j === 3 ? 0.2 : 0, k: 0, e: 0, onT: false };
+});
+
+// dust motes
+let dust;
+{
+  const c = document.createElement('canvas'); c.width = c.height = 32; const g = c.getContext('2d');
+  const gr = g.createRadialGradient(16, 16, 0, 16, 16, 16); gr.addColorStop(0, 'rgba(255,235,200,1)'); gr.addColorStop(1, 'rgba(255,235,200,0)'); g.fillStyle = gr; g.fillRect(0, 0, 32, 32);
+  const n = 220, pos = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) { const a = Math.random() * TAU, r = 1 + Math.random() * 6; pos[i * 3] = Math.cos(a) * r; pos[i * 3 + 1] = 0.3 + Math.random() * 4.6; pos[i * 3 + 2] = Math.sin(a) * r; }
+  const bg = new THREE.BufferGeometry(); bg.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  dust = new THREE.Points(bg, new THREE.PointsMaterial({ map: new THREE.CanvasTexture(c), size: 0.03, transparent: true, opacity: 0.22, depthWrite: false, blending: THREE.AdditiveBlending, color: 0xffe2b8 }));
+  scene.add(dust);
+}
+
+// post-processing
+const rt = new THREE.WebGLRenderTarget(innerWidth, innerHeight, { samples: 4, type: THREE.HalfFloatType });
+const composer = new EffectComposer(renderer, rt);
+composer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+composer.addPass(new RenderPass(scene, camera));
+const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.36, 0.7, 1.35);
+composer.addPass(bloom); composer.addPass(new OutputPass());
+addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); composer.setSize(innerWidth, innerHeight); });
+
+/* ------------------------------------------------------------------ audio */
+let ctx, dry, wet, noiseBuf;
+function initAudio() {
+  ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const master = ctx.createGain(); master.gain.value = 0.9;
+  const comp = ctx.createDynamicsCompressor(); comp.threshold.value = -14; comp.ratio.value = 3; comp.attack.value = 0.004; comp.release.value = 0.3;
+  master.connect(comp); comp.connect(ctx.destination);
+  dry = ctx.createGain(); dry.gain.value = 0.8; dry.connect(master);
+  wet = ctx.createGain(); wet.gain.value = 0.34;
+  const len = Math.floor(ctx.sampleRate * 3.2), ir = ctx.createBuffer(2, len, ctx.sampleRate);
+  for (let ch = 0; ch < 2; ch++) { const d = ir.getChannelData(ch); let lp = 0; for (let i = 0; i < len; i++) { const t = i / ctx.sampleRate, k = 0.25 + 0.7 * Math.min(1, t / 1.2); lp += ((Math.random() * 2 - 1) - lp) * (1 - k); d[i] = lp * Math.exp(-t * 2.1) * Math.min(1, t / 0.012) * 2.2; } }
+  const conv = ctx.createConvolver(); conv.buffer = ir; wet.connect(conv); conv.connect(master);
+  noiseBuf = ctx.createBuffer(1, ctx.sampleRate * 0.25, ctx.sampleRate); const nd = noiseBuf.getChannelData(0); for (let i = 0; i < nd.length; i++) nd[i] = Math.random() * 2 - 1;
+  ctx.resume();
+}
+function noiseHit(when, freq, q, amp, dur, dest) {
+  const s = ctx.createBufferSource(); s.buffer = noiseBuf; const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = freq; f.Q.value = q;
+  const g = ctx.createGain(); g.gain.setValueAtTime(amp, when); g.gain.exponentialRampToValueAtTime(0.0001, when + dur);
+  s.connect(f); f.connect(g); g.connect(dest); s.start(when, Math.random() * 0.1, dur + 0.02);
+}
+function strike(freq, when, pan, vel) {
+  const p = ctx.createStereoPanner(); p.pan.value = pan; p.connect(dry); p.connect(wet);
+  const out = ctx.createGain(); out.gain.value = vel; out.connect(p);
+  const sc = Math.pow(440 / freq, 0.35);
+  const parts = [[1, 1, 3.0], [1.0035, 0.35, 2.4], [2, 0.07, 1.4], [4.0, 0.2, 0.75], [10.1, 0.06, 0.16], [6.3, 0.035, 0.09]];
+  let tmax = 0;
+  for (const [ratio, amp, dec] of parts) {
+    const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.value = freq * ratio;
+    const g = ctx.createGain(), d = dec * sc; tmax = Math.max(tmax, d);
+    g.gain.setValueAtTime(0, when); g.gain.linearRampToValueAtTime(amp, when + 0.0025); g.gain.exponentialRampToValueAtTime(0.0002, when + d);
+    o.connect(g); g.connect(out); o.start(when); o.stop(when + d + 0.05);
+  }
+  noiseHit(when, 3800, 0.9, 0.16, 0.022, out);
+  setTimeout(() => { try { p.disconnect(); } catch (e) {} }, (when - ctx.currentTime + tmax + 0.5) * 1000);
+}
+function tick(when, pan, vel, tock) {
+  const p = ctx.createStereoPanner(); p.pan.value = pan; p.connect(dry); p.connect(wet);
+  noiseHit(when, tock ? 1300 : 2400, 3, 0.11 * vel, 0.035, p);
+  const o = ctx.createOscillator(), g = ctx.createGain(); o.frequency.value = tock ? 310 : 1750; g.gain.setValueAtTime(0.035 * vel, when); g.gain.exponentialRampToValueAtTime(0.0001, when + (tock ? 0.09 : 0.03)); o.connect(g); g.connect(p); o.start(when); o.stop(when + 0.12);
+  setTimeout(() => { try { p.disconnect(); } catch (e) {} }, (when - ctx.currentTime + 1) * 1000);
+}
+
+/* ------------------------------------------------------------------ run loop */
+const T_START = 11.2 * BEAT;
+let animT = T_START, started = false, startReal = 0, lastNow = performance.now(), realT = 0;
+const pending = [];
+const _p = V(), _ndc = V(), _ax = V(), _q = new THREE.Quaternion();
+
+function panOf(v) { _ndc.copy(v).project(camera); return Math.max(-0.75, Math.min(0.75, _ndc.x * 0.7)); }
+function schedule() {
+  for (const m of marbles) {
+    for (;;) {
+      const ev = EVENTS[m.e], t = m.j * SLOT + m.k * TLOOP + ev.t;
+      if (t > animT + 0.14) break;
+      const late = t < animT - 0.2, when = Math.max(ctx.currentTime + 0.005, ctx.currentTime + (t - animT));
+      if (!late) {
+        if (ev.bar !== undefined) { const b = bars[ev.bar]; strike(freqOf(b.n), when, panOf(b.top), 0.21 * (0.9 + Math.random() * 0.2)); }
+        else tick(when, panOf(ev.tock ? Lp : X0), ev.tick, ev.tock);
+        pending.push({ t, ev, m });
+      }
+      if (++m.e >= EVENTS.length) { m.e = 0; m.k++; }
+    }
+  }
+}
+function placeMarble(m, dt) {
+  const u = animT - m.j * SLOT; let on;
+  if (u < 0) {
+    if (m.q > 0) { const f = smooth((u + 7.4 * BEAT) / (1.3 * BEAT)); exitC.at(exitC.len - m.q * (1 - f), _p); on = true; }
+    else { _p.copy(Lp); on = false; }
+  } else on = pathPos(u % TLOOP, _p);
+  if (m.has && dt > 0) {
+    _a.subVectors(_p, m.prev);
+    if (on && m.onT) { _a.y = 0; const d = _a.length(); if (d > 1e-6) { _ax.crossVectors(Y, _a).normalize(); m.w.copy(_ax).multiplyScalar(d / R / dt); } else m.w.set(0, 0, 0); }
+    else if (!on && _p.x === Lp.x && _p.z === Lp.z) m.w.multiplyScalar(Math.exp(-dt * 5));
+    const w = m.w.length() * dt; if (w > 1e-6) { _q.setFromAxisAngle(_ax.copy(m.w).normalize(), w); m.g.quaternion.premultiply(_q); }
+  }
+  m.onT = on; m.prev.copy(_p); m.has = true; m.g.position.copy(_p);
+}
+const black = new THREE.Color(0);
+function frame(now) {
+  requestAnimationFrame(frame);
+  const dtR = Math.min(0.1, (now - lastNow) / 1000); lastNow = now; realT += dtR;
+  let dt = 0;
+  if (started) { dt = dtR * smooth((realT - startReal) / 0.9 + 0.05); animT += dt; }
+
+  // camera: a slow walk around the sculpture
+  const a = (window.__cam ? window.__cam.a : 0.75 + realT * 0.082), asp = camera.aspect, far = Math.max(1, 1.55 / asp);
+  const rad = (9.0 + 0.55 * Math.sin(realT * 0.047)) * far, h = 3.5 + 0.75 * Math.sin(realT * 0.061 + 1);
+  camera.position.set(Math.cos(a) * rad, h, Math.sin(a) * rad);
+  camera.lookAt(0.0, 1.95 + 0.1 * Math.sin(realT * 0.05), 0);
+  if (window.__cam && window.__cam.pos) { camera.position.set(...window.__cam.pos); camera.lookAt(...window.__cam.look); }
+  camera.updateMatrixWorld();
+
+  if (started) schedule();
+  screw.rotation.y = TAU * animT / P_ROT - phiL + aPick;
+  for (const m of marbles) placeMarble(m, dt);
+
+  for (let i = pending.length - 1; i >= 0; i--) {
+    const e = pending[i]; if (e.t > animT) continue;
+    pending.splice(i, 1);
+    if (e.ev.bar !== undefined) { const b = bars[e.ev.bar]; b.hitT = e.t; b.col.copy(e.m.col); b.glow = 1; }
+  }
+  for (const b of bars) {
+    const t = animT - b.hitT;
+    if (b.glow > 0.002) {
+      b.glow = Math.exp(-t * 2.6);
+      b.mat.emissive.copy(b.col); b.mat.emissiveIntensity = 3.0 * b.glow + 2.5 * Math.exp(-t * 14);
+      const v = Math.exp(-t * 5) * Math.sin(t * 58);
+      b.mesh.position.y = -0.013 * v - 0.004 * Math.exp(-t * 9); b.mesh.rotation.z = 0.02 * v * Math.cos(t * 23);
+    } else if (b.glow !== 0) { b.glow = 0; b.mat.emissiveIntensity = 0; b.mesh.position.y = 0; b.mesh.rotation.z = 0; }
+  }
+  dust.rotation.y = realT * 0.012; dust.position.y = Math.sin(realT * 0.1) * 0.15;
+  composer.render();
+}
+function start() {
+  if (started) return; started = true; startReal = realT;
+  initAudio();
+  document.getElementById('ui').style.opacity = 0;
+  const cap = document.getElementById('cap');
+  setTimeout(() => cap.style.opacity = 0.75, 3200); setTimeout(() => cap.style.opacity = 0, 10500);
+}
+addEventListener('pointerdown', start); addEventListener('keydown', start);
+document.addEventListener('visibilitychange', () => { lastNow = performance.now(); });
+window.__dbg = { tNote, tF, tG, bars, marbles, SLOT, entryT: entrySim.T, vEntry: entrySim.vEnd, exitT: exitSim.T, vExit: exitSim.vEnd, WAIT, A_X, PITCH, V_LIFT, yT, entryLen: entryC.len, exitLen: exitC.len, get animT() { return animT; }, set animT(v) { animT = v; } };
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
