@@ -1,0 +1,26 @@
+[
+ {"key":"opus","video":"videos/opus-5.5-high.mp4","eyebrow":"Model 1 of 4","name":"Opus 5.5","effort":"high reasoning effort","tune":"Brahms' Lullaby, with a bass line","score":7.0,
+  "notes":[
+   {"kind":"good","label":"Ambition","text":"The most ambitious machine: a glowing brass lantern with a screw lift, eleven gated tracks and dust in the light."},
+   {"kind":"good","label":"Motion","text":"Marbles really circulate: lifted, queued, released, then they swirl down the bowl and get lifted again."},
+   {"kind":"bad","label":"Clarity","text":"So much is moving that it's hard to see which marble played which note. Struck bars flare almost white."},
+   {"kind":"mid","label":"Sound","text":"A warm bell tone with a bass line, but the rhythm drifts and stray ticks blur the tune."}]},
+ {"key":"fable","video":"videos/fable-5.2-medium.mp4","eyebrow":"Model 2 of 4","name":"Fable 5.2","effort":"medium reasoning effort","tune":"Frère Jacques, as a four-voice round","score":7.5,
+  "notes":[
+   {"kind":"good","label":"Idea","text":"The cleverest musical idea: the spiral of 32 bars is the score, and four marbles play it as a round."},
+   {"kind":"good","label":"Clarity","text":"Easy to follow. Each marble has its own colour, and the bar it hits glows in that colour."},
+   {"kind":"good","label":"Sound","text":"Every note lands in tune and on time. The round thins out and rebuilds, so the loop never feels like a restart."},
+   {"kind":"mid","label":"Looks","text":"Clean and calm, but a little plain: the machine sits small in the frame and the marbles read as plastic, not glass."}]},
+ {"key":"sol","video":"videos/opus-5.5-high.mp4","eyebrow":"Model 3 of 4","name":"Sol 6.1","effort":"high reasoning effort","tune":"Ode to Joy","score":8.0,
+  "notes":[
+   {"kind":"good","label":"Placeholder","text":"Placeholder text for layout testing, about two lines long so the card has a realistic height."},
+   {"kind":"good","label":"Placeholder","text":"Placeholder text for layout testing."},
+   {"kind":"good","label":"Placeholder","text":"Placeholder text for layout testing, about two lines long."},
+   {"kind":"mid","label":"Placeholder","text":"Placeholder text for layout testing, about two lines long so the card has a realistic height."}]},
+ {"key":"gemini","video":"videos/fable-5.2-medium.mp4","eyebrow":"Model 4 of 4","name":"Gemini Hydrogen","effort":"effort not specified","tune":"Brahms' Lullaby","score":6.0,
+  "notes":[
+   {"kind":"good","label":"Placeholder","text":"Placeholder text for layout testing, about two lines long so the card has a realistic height."},
+   {"kind":"mid","label":"Placeholder","text":"Placeholder text for layout testing."},
+   {"kind":"bad","label":"Placeholder","text":"Placeholder text for layout testing, about two lines long."},
+   {"kind":"bad","label":"Placeholder","text":"Placeholder text for layout testing, about two lines long so the card has a realistic height."}]}
+]

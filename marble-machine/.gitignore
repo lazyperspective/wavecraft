@@ -1,3 +1,6 @@
 # in-progress recording intermediates
 videos/*.video.mp4
 videos/*.wav
+videos/sol-a.*
+videos/sol-b.*
+videos/gem-a.*
