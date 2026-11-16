@@ -11,6 +11,21 @@ Two sub-agents got the identical creative brief in [`PROMPT.md`](PROMPT.md) and 
 
 Open either `index.html` in a desktop browser and click to start.
 
+## Four-way comparison
+
+Two more builds from the same brief were added later: Sol 6.1 (high) in [`sol-6.1-high/`](sol-6.1-high/index.html) and Gemini Hydrogen in [`gemini-hydrogen/`](gemini-hydrogen/index.html). Each has its own recording in `videos/`.
+
+[`videos/comparison-4way.mp4`](videos/comparison-4way.mp4) (59 s) opens on all four in a 2×2 grid, zooms into each in turn with its own audio and a review card, and ends on the grid with every score.
+
+| Model | Tune | Score |
+|---|---|---|
+| Sol 6.1 (high) | Ode to Joy | 8.5 |
+| Fable 5.2 (medium) | Frère Jacques, as a round | 7.5 |
+| Opus 5.5 (high) | Brahms' Lullaby, with bass | 7.0 |
+| Gemini Hydrogen | Brahms' Lullaby | 5.5 |
+
+The scores and comments in [`recording/reviews.json`](recording/reviews.json) were written by Claude Opus 5.5, which is also one of the four contestants. They rest on frames from across each recording and on the notes detected in each soundtrack ([`recording/notes.py`](recording/notes.py)). Volumes were evened out so no build sounds better just for being louder.
+
 ## How the videos were made
 
 Headless Chromium renders WebGL in software at 1–5 s per frame, so the recorder ([`recording/record.cjs`](recording/record.cjs)) runs the page on a virtual clock. `requestAnimationFrame`, timers, `performance.now`, CSS animations and every `AudioContext` (swapped for an `OfflineAudioContext`) advance exactly 1/30 s per captured frame. The audio is rendered offline afterwards, so every note is sample-aligned with the frame where the marble strikes its bar. Each recording is 4 s of the still intro, a click, then 60 s of the performance at 1280×720.
