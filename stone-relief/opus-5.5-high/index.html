@@ -1,0 +1,808 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Two Faces in Stone</title>
+<style>
+  :root{
+    --ink: rgba(226,214,192,0.78);
+    --ink-dim: rgba(226,214,192,0.42);
+    --ink-faint: rgba(226,214,192,0.18);
+    --bg: #0d0c0b;
+  }
+  html,body{margin:0;padding:0;background:var(--bg);}
+  body{
+    color:var(--ink);
+    font-family: "Cormorant Garamond","EB Garamond",Garamond,"Hoefler Text","Iowan Old Style",Georgia,"Times New Roman",serif;
+    overflow-x:hidden;
+  }
+  #c{position:fixed;inset:0;width:100vw;height:100vh;display:block;}
+  #scroller{height:calc(100vh + 2100px);}
+  .ui{position:fixed;inset:0;pointer-events:none;}
+  .title{
+    position:absolute;left:clamp(16px,3.2vw,44px);top:clamp(16px,3.6vh,40px);
+    opacity:0;transition:opacity 2.4s ease 0.8s;
+  }
+  .ready .title{opacity:1;}
+  .title h1{
+    margin:0;font-weight:400;font-size:13px;letter-spacing:0.34em;text-transform:uppercase;
+    color:var(--ink);
+  }
+  .title p{
+    margin:7px 0 0;font-style:italic;font-size:13px;letter-spacing:0.04em;color:var(--ink-dim);
+  }
+  .rail{
+    position:absolute;left:50%;bottom:clamp(18px,4.2vh,40px);transform:translateX(-50%);
+    display:flex;align-items:center;gap:14px;
+    font-size:12px;letter-spacing:0.28em;color:var(--ink-dim);
+    opacity:0;transition:opacity 2.4s ease 1.4s;
+  }
+  .ready .rail{opacity:1;}
+  .rail .n{width:22px;text-align:center;transition:color .8s ease;}
+  .rail .n.on{color:var(--ink);}
+  .rail .line{position:relative;width:min(180px,34vw);height:1px;background:var(--ink-faint);}
+  .rail .dot{
+    position:absolute;top:50%;left:0;width:5px;height:5px;margin:-2.5px 0 0 -2.5px;border-radius:50%;
+    background:var(--ink);box-shadow:0 0 10px rgba(255,230,190,0.35);
+  }
+  .hint{
+    position:absolute;left:50%;bottom:calc(clamp(18px,4.2vh,40px) + 30px);transform:translateX(-50%);
+    font-size:11px;letter-spacing:0.42em;text-transform:uppercase;color:var(--ink-dim);
+    display:flex;flex-direction:column;align-items:center;gap:8px;
+    opacity:0;transition:opacity 1.6s ease;
+  }
+  .ready .hint{opacity:1;transition:opacity 2.4s ease 2.2s;}
+  .ready .hint.gone{opacity:0;transition:opacity 1.2s ease;}
+  .hint i{display:block;width:1px;height:22px;background:linear-gradient(var(--ink-dim),transparent);
+    animation:drip 2.8s ease-in-out infinite;transform-origin:top;}
+  @keyframes drip{0%{transform:scaleY(0);opacity:0}30%{opacity:1}70%{transform:scaleY(1);opacity:.8}100%{transform:scaleY(1);opacity:0}}
+  .err{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;color:var(--ink-dim);font-style:italic;}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div class="ui" id="ui">
+  <div class="title">
+    <h1>Two Faces in Stone</h1>
+    <p>limestone, low relief &middot; afternoon light</p>
+  </div>
+  <div class="hint" id="hint">scroll<i></i></div>
+  <div class="rail">
+    <span class="n on" id="n1">I</span>
+    <div class="line"><div class="dot" id="dot"></div></div>
+    <span class="n" id="n2">II</span>
+  </div>
+</div>
+<div id="scroller"></div>
+
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+</script>
+<script type="module">
+import * as THREE from 'three';
+
+/* ------------------------------------------------------------------ */
+/*  Shared GLSL: noise + the wall the slab is set into                 */
+/* ------------------------------------------------------------------ */
+const COMMON = /* glsl */`
+float sat(float x){return clamp(x,0.,1.);}
+float hash12(vec2 p){vec3 p3=fract(vec3(p.xyx)*.1031);p3+=dot(p3,p3.yzx+33.33);return fract((p3.x+p3.y)*p3.z);}
+vec2 hash22(vec2 p){vec3 p3=fract(vec3(p.xyx)*vec3(.1031,.1030,.0973));p3+=dot(p3,p3.yzx+33.33);return fract((p3.xx+p3.yz)*p3.zy);}
+float vnoise(vec2 p){vec2 i=floor(p),f=fract(p);vec2 u=f*f*(3.-2.*f);
+  float a=hash12(i),b=hash12(i+vec2(1,0)),c=hash12(i+vec2(0,1)),d=hash12(i+vec2(1,1));
+  return mix(mix(a,b,u.x),mix(c,d,u.x),u.y);}
+const mat2 FM=mat2(1.6,1.2,-1.2,1.6);
+float fbm(vec2 p){float s=0.,a=.5;for(int i=0;i<5;i++){s+=a*vnoise(p);p=FM*p;a*=.5;}return s;}
+float fbm3(vec2 p){float s=0.,a=.5;for(int i=0;i<3;i++){s+=a*vnoise(p);p=FM*p;a*=.5;}return s*1.1428;}
+
+/* ashlar wall: blocks in running bond with recessed joints (height >= 0) */
+float wallH(vec2 p){
+  vec2 bs=vec2(0.92,0.46);
+  vec2 q=p/bs+vec2(0.31,0.27);
+  float row=floor(q.y);
+  q.x+=mod(row,2.)*0.5;
+  vec2 id=floor(q);vec2 f=fract(q);
+  vec2 e2=min(f,1.-f)*bs;float e=min(e2.x,e2.y);
+  float j=smoothstep(0.002,0.016,e+(vnoise(p*38.)-0.5)*0.007);
+  float face=0.006+0.004*vnoise(p*5.+id*13.1)+0.0025*fbm3(p*22.+id*3.);
+  return j*face;
+}
+`;
+
+/* ------------------------------------------------------------------ */
+/*  Height pass: the carving itself, written into a float texture      */
+/* ------------------------------------------------------------------ */
+const HEIGHT_FRAG = /* glsl */`
+precision highp float;
+uniform vec4 uDomain;
+uniform float uM;
+varying vec2 vUv;
+${COMMON}
+
+float G;
+float P(float a,float b){return mix(a,b,G);}
+float smax(float a,float b,float k){float h=sat(0.5+0.5*(a-b)/k);return mix(b,a,h)+k*h*(1.-h);}
+vec2 rot(vec2 p,float a){float c=cos(a),s=sin(a);return vec2(c*p.x-s*p.y,s*p.x+c*p.y);}
+float capE(vec2 p,vec2 c,vec2 r,float h,float pw){vec2 d=(p-c)/r;float t=1.-dot(d,d);return h*pow(max(t,0.),pw);}
+float bump(vec2 p,vec2 c,vec2 r){vec2 d=(p-c)/r;float t=max(1.-dot(d,d),0.);return t*t;}
+float bumpR(vec2 p,vec2 c,vec2 r,float a){vec2 d=rot(p-c,a)/r;float t=max(1.-dot(d,d),0.);return t*t;}
+float vg(float d,float w){float t=sat(1.-abs(d)/w);return pow(t,1.35);}
+float sdSeg(vec2 p,vec2 a,vec2 b){vec2 pa=p-a,ba=b-a;float h=sat(dot(pa,ba)/dot(ba,ba));return length(pa-ba*h);}
+
+/* carved locks: overlapping tapered tufts laid along a flow (r = along, across) */
+float tufts(vec2 r,float sc,float elong,float seed,out float cut){
+  r/=sc;r.x/=elong;
+  vec2 ip=floor(r),fp=fract(r);float best=-1.,second=-1.;
+  for(int j=-1;j<=1;j++)for(int i=-1;i<=1;i++){
+    vec2 o=vec2(i,j);vec2 h=hash22(ip+o+seed);
+    vec2 c=o+0.5+vec2(0.55,0.4)*(h-0.5);
+    vec2 d=fp-c;
+    d.y+=(h.y-0.5)*0.9*d.x*d.x;
+    float taper=0.62+0.38*sat(0.6-d.x);
+    float ex=d.x/0.78,ey=d.y/(0.56*taper);
+    float t=1.-ex*ex-ey*ey;
+    float v=sqrt(max(t,0.))*(0.72+0.28*h.x);
+    v-=0.10*vg(d.y-0.08*sin(d.x*4.+h.x*6.),0.10)*sat(t*3.);
+    if(v>best){second=best;best=v;}else if(v>second){second=v;}
+  }
+  cut=1.-sat((best-second)*6.);
+  return max(best,0.);
+}
+
+float slabSDF(vec2 p){
+  vec2 b=vec2(0.62,0.80);float r=0.014;
+  vec2 d=abs(p)-b+r;float s=length(max(d,0.))+min(max(d.x,d.y),0.)-r;
+  s+=(fbm(p*6.+3.)-0.5)*0.016+(vnoise(p*42.)-0.5)*0.004;
+  return s;
+}
+float panelSDF(vec2 p){
+  float cy=0.165,r=0.52;
+  vec2 c=vec2(0.,(cy-0.715)*0.5);vec2 hb=vec2(r,(cy+0.715)*0.5);
+  vec2 d=abs(p-c)-hb;float bx=length(max(d,0.))+min(max(d.x,d.y),0.);
+  float ci=length(p-vec2(0.,cy))-r;
+  return min(bx,ci);
+}
+const float SLAB_TOP=0.056;
+/* molding profile: step, astragal bead, fillet, then a cove down to the field */
+float mold(float d){
+  float h=-0.004*smoothstep(0.0,0.0025,d);
+  float bd=(d-0.0105)/0.0062;h+=0.0048*sqrt(sat(1.-bd*bd));
+  h-=0.0045*smoothstep(0.0165,0.0185,d);
+  float cv=sat((d-0.0185)/0.03);
+  h-=0.019*(1.-sqrt(sat(1.-cv*cv)));
+  h-=0.019*cv*0.0;
+  return h;
+}
+
+/* ------------------------------------------------------------------ */
+/*  The figure. Face units: eye line at y=0, chin near y=-1.08.        */
+/*  Every proportion is a pair (first face, second face); G blends.    */
+/* ------------------------------------------------------------------ */
+vec4 figure(vec2 q0){
+  float m=uM;
+  float fl=sin(3.14159265*m);
+  // while the stone "changes its mind" the whole surface flows a little
+  vec2 wq=vec2(vnoise(q0*1.5+vec2(m*2.2,1.3)),vnoise(q0*1.5+vec2(5.2,7.+m*2.2)))-0.5;
+  vec2 q=q0+fl*0.07*wq;
+  float X=q.x,Y=q.y;
+
+  // local memory front: hair first, then face, then beard and drapery
+  float fn=fbm3(q*1.15+17.);
+  float f=sat((1.3-Y)/3.5*0.75+(fn-0.5)*0.55+0.12);
+  float lm=smoothstep(f*0.55,f*0.55+0.45,m);
+
+  float yaw=P(-0.075,0.085);
+  float open=smoothstep(0.25,0.85,G);
+
+  /* ---- skull and face masses ---- */
+  float cr=capE(q,vec2(0.,0.30),vec2(P(0.77,0.84),0.97),0.30,0.62);
+  float fm=capE(q,vec2(yaw*0.15,-0.15),vec2(P(0.73,0.79),0.79),0.31,0.72);
+  float jw=capE(q,vec2(yaw*0.25,-0.655),vec2(P(0.42,0.56),P(0.40,0.43)),0.275,0.62);
+  float z=smax(cr,fm,0.10);
+  z=smax(z,jw,0.08);
+
+  z+=0.05*bump(q,vec2(yaw*0.1,0.48),vec2(0.62,0.40));
+
+  float deep=0.;
+  for(int k=0;k<2;k++){
+    float s=k==0?-1.:1.;
+    z+=0.015*bump(q,vec2(s*0.25,0.55),vec2(0.2,0.18));
+    z-=P(0.02,0.042)*bump(q,vec2(s*0.67,0.30),vec2(0.15,0.25));
+    // cheekbones, fullness, hollows
+    z+=P(0.05,0.055)*bumpR(q,vec2(s*0.42+yaw*0.12,P(-0.10,-0.08)),vec2(0.26,0.15),-0.35*s);
+    z+=P(0.035,0.0)*bump(q,vec2(s*0.36+yaw*0.1,-0.40),vec2(0.25,0.22));
+    z-=P(0.0,0.04)*bump(q,vec2(s*0.45+yaw*0.1,-0.45),vec2(0.17,0.18));
+
+    /* ---- eyes ---- */
+    vec2 E=vec2(s*P(0.292,0.305)+yaw*0.35,P(0.0,0.012));
+    z-=P(0.085,0.115)*bump(q,E+vec2(-0.015*s,0.035),vec2(0.25,P(0.19,0.18)));
+    z+=P(0.035,0.075)*bumpR(q,vec2(s*0.28+yaw*0.3,P(0.205,0.165)),vec2(0.27,0.085),-0.18*s);
+    vec2 e=q-E;e.x*=s;
+    float tb=1.-(e.x/0.145)*(e.x/0.145)-(e.y/0.098)*(e.y/0.098);
+    float ball=0.066*pow(max(tb,0.),0.85);
+    float xn=clamp(e.x/0.13,-1.2,1.2);
+    float upO=0.022-0.040*xn*xn+0.010*xn;
+    float upC=-0.030+0.020*xn*xn+0.004*xn;
+    float up=mix(upC,upO,open);
+    float loO=-0.042+0.032*xn*xn;
+    float lo=mix(up-0.002,loO,open);
+    float tl=1.-(e.x/0.165)*(e.x/0.165)-((e.y-0.012)/0.12)*((e.y-0.012)/0.12);
+    float inEye=sat(tb*5.);
+    float lidZone=smoothstep(0.,0.6,tl);
+    float lidU=smoothstep(up-0.0035,up+0.0035,e.y);
+    float lidL=smoothstep(lo+0.0035,lo-0.0035,e.y);
+    float vis=(1.-lidU)*(1.-lidL)*inEye;
+    float eh=ball+lidZone*(0.013*lidU+0.004*lidL*smoothstep(-0.11,-0.04,e.y));
+    float creaseY=mix(0.058,0.064,open)-0.05*xn*xn;
+    eh-=0.008*lidZone*vg(e.y-creaseY,0.013)*smoothstep(-0.01,0.03,e.y);
+    // lash line of the closed lids, a fine incision
+    eh-=(1.-open)*0.006*vg(e.y-up,0.006)*inEye;
+    // iris ring and drilled pupil (open eyes only)
+    float ri=length(e-vec2(0.004*s,-0.004));
+    eh-=vis*open*0.004*vg(ri-0.050,0.006);
+    float pu=smoothstep(0.019,0.010,length((e-vec2(-0.004,0.010))*vec2(1.,0.8)));
+    eh-=vis*open*0.024*pu;
+    deep=max(deep,vis*open*pu);
+    // lower-lid bags of the older face
+    eh+=lm*0.010*bump(q,E+vec2(0.0,-0.115),vec2(0.13,0.035));
+    eh-=lm*0.006*vg(e.y-(-0.150+0.05*xn*xn),0.012)*sat(1.-xn*xn*0.8);
+    z+=eh;
+
+    /* ---- crow's feet, brow furrow (second face) ---- */
+    vec2 cfo=vec2(s*0.455+yaw*0.3,0.0);
+    float cf=0.;
+    cf+=vg(sdSeg(q,cfo+vec2(0.,0.03),cfo+vec2(s*0.09,0.07)),0.010);
+    cf+=vg(sdSeg(q,cfo,cfo+vec2(s*0.10,-0.005)),0.010);
+    cf+=vg(sdSeg(q,cfo+vec2(0.,-0.03),cfo+vec2(s*0.085,-0.08)),0.010);
+    z-=lm*0.006*cf;
+    z-=lm*0.010*vg(sdSeg(q,vec2(s*0.045+yaw*0.3,0.10),vec2(s*0.06+yaw*0.3,0.23)),0.012);
+
+    /* ---- ears ---- */
+    vec2 Ec=vec2(s*P(0.785,0.835)-yaw*0.15,-0.11);
+    float ear=capE(q,Ec,vec2(0.08,0.21),0.10,0.6);
+    z=smax(z,ear,0.03);
+    z-=0.035*bump(q,Ec+vec2(-0.012*s,-0.02),vec2(0.045,0.13));
+
+    /* ---- nasolabial fold ---- */
+    float nl=sdSeg(q,vec2(s*0.135+yaw*0.5,-0.40),vec2(s*0.255+yaw*0.4,-0.71));
+    z-=P(0.008,0.026)*vg(nl,0.045);
+  }
+
+  /* ---- forehead lines (second face) ---- */
+  for(int i=0;i<3;i++){
+    float fi=float(i);
+    float yi=0.36+0.105*fi+0.014*sin(X*5.+fi*1.7);
+    z-=lm*0.0075*vg(Y-yi,0.016)*sat(1.-pow(X/(0.42+0.04*fi),2.));
+  }
+
+  /* ---- nose ---- */
+  {
+    float sxN=yaw*0.55;
+    float t=sat((0.06-Y)/0.42);
+    float w=mix(0.052,0.080,t)*P(1.0,1.12);
+    float dx=X-sxN*t-yaw*0.15;
+    float hN=mix(0.012,P(0.088,0.10),pow(t,1.35))+P(0.0,0.014)*sin(3.14159*t);
+    float ridge=hN*sqrt(sat(1.-(dx/w)*(dx/w)))*smoothstep(0.13,0.02,Y)*smoothstep(-0.43,-0.35,Y);
+    vec2 tipC=vec2(sxN+yaw*0.15,P(-0.37,-0.40));
+    float tip=capE(q,tipC,vec2(0.074,0.068)*P(1.0,1.15),P(0.095,0.115),0.6);
+    float nose=max(ridge,tip);
+    for(int k=0;k<2;k++){
+      float s=k==0?-1.:1.;
+      vec2 ac=tipC+vec2(s*0.098*P(1.0,1.15),-0.052);
+      nose=smax(nose,capE(q,ac,vec2(0.052,0.046)*P(1.0,1.12),0.042,0.6),0.012);
+      float ea=sqrt(dot((q-ac)/vec2(0.06,0.055),(q-ac)/vec2(0.06,0.055)));
+      nose-=0.010*vg(ea-1.0,0.25)*step(-0.47,Y)*sat((ac.y+0.04-Y)*20.+0.5)*0.0;
+      vec2 nc=tipC+vec2(s*0.048,-0.088);
+      float nd=dot((q-nc)/vec2(0.028,0.013),(q-nc)/vec2(0.028,0.013));
+      nose-=0.022*smoothstep(1.0,0.2,nd);
+      deep=max(deep,0.35*smoothstep(1.0,0.2,nd));
+    }
+    // ala crease: a crisp cut where nostril wing meets cheek
+    z+=nose;
+  }
+
+  /* ---- mouth ---- */
+  {
+    vec2 M=vec2(yaw*0.45,P(-0.64,-0.655));
+    vec2 mq=q-M;
+    float mw=P(0.205,0.18);
+    z+=0.055*bump(q,M+vec2(0.,0.04),vec2(0.31,0.23));
+    float bow=0.010*exp(-pow((abs(mq.x)-0.042)/0.03,2.))-0.006*exp(-mq.x*mq.x/0.0007);
+    z+=capE(mq,vec2(0.,0.022+bow*0.5),vec2(mw,0.036+bow),P(0.032,0.020),0.5);
+    z+=capE(mq,vec2(0.,-0.046),vec2(mw*0.84,P(0.052,0.040)),P(0.038,0.024),0.55);
+    float curve=P(0.18,-0.35);
+    float ym=-0.002+curve*mq.x*mq.x;
+    float lineFade=sat(1.-pow(mq.x/(mw*1.04),4.));
+    z-=0.03*vg(mq.y-ym,0.011)*lineFade;
+    deep=max(deep,0.5*vg(mq.y-ym,0.006)*lineFade);
+    for(int k=0;k<2;k++){float s=k==0?-1.:1.;
+      z-=0.018*bump(mq,vec2(s*mw,ym+curve*mw*mw*0.0),vec2(0.028,0.022));
+      z+=0.007*bump(mq,vec2(s*0.026,0.085),vec2(0.012,0.05));
+    }
+    z-=0.024*bump(mq,vec2(0.,-0.135),vec2(0.13,0.035));
+    z+=P(0.045,0.06)*bump(q,vec2(yaw*0.35,-0.93),vec2(P(0.17,0.21),0.12));
+  }
+
+  /* ---- neck, shoulders ---- */
+  float nw=P(0.355,0.43);
+  float neck=0.185*pow(sat(1.-pow((X-yaw*0.1)/nw,2.)),0.5)*smoothstep(-0.32,-0.66,Y);
+  float sh=capE(q,vec2(0.,-2.22),vec2(1.66,1.02),0.24,0.5);
+  float body=smax(neck,sh,0.16);
+  // the first face: tendons of the neck, collarbones
+  for(int k=0;k<2;k++){float s=k==0?-1.:1.;
+    body+=(1.-lm)*0.008*vg(sdSeg(q,vec2(s*0.26,-0.86),vec2(s*0.08,-1.36)),0.07);
+    body+=(1.-lm)*0.010*vg(sdSeg(q,vec2(s*0.12,-1.37),vec2(s*0.62,-1.27)),0.05);
+    body-=(1.-lm)*0.012*bump(q,vec2(0.,-1.40),vec2(0.07,0.06));
+  }
+  z=smax(z,body,0.025);
+
+  /* ---- drapery ---- */
+  float garAmt=0.;
+  float onBody=smoothstep(0.0,0.05,sh)+smoothstep(0.0,0.05,neck)*0.0;
+  {
+    // chiton: swags hanging from the neckline, falling into vertical folds
+    float ynW=-1.38+0.22*pow(abs(X)/0.85,2.);
+    float gW=smoothstep(ynW+0.006,ynW-0.006,Y)*onBody;
+    float dn=ynW-Y;
+    float swag=sqrt(abs(sin(dn*24.+0.5*sin(X*4.))))*exp(-dn*2.4);
+    float vert=sqrt(abs(sin(X*13.+1.2*sin(Y*2.5+X*3.))))*sat(dn*1.6);
+    float foldW=0.03*mix(swag,vert,sat(dn*1.6))*sat(dn*30.);
+    float garW=body+0.022+foldW;
+    float wW=(1.-lm);
+    z=mix(z,max(z,garW),gW*wW);
+    garAmt=max(garAmt,gW*wW);
+    // a string of beads
+    float bx=floor(X/0.052+0.5)*0.052;
+    float by=-1.36+0.22*pow(abs(bx)/0.85,2.)-0.01;
+    vec2 bd=vec2(X-bx,Y-by);
+    float bon=step(abs(bx),0.40);
+    float bead=capE(bd,vec2(0.),vec2(0.021),0.024,0.5)*bon;
+    z=mix(z,max(z,body+bead+0.008),wW*sat(bead*80.));
+
+    // the second face: a heavy cloak thrown over the shoulder, pinned with a brooch
+    float ynM=-1.22-0.10*X-0.06*X*X;
+    float gM=smoothstep(ynM+0.006,ynM-0.006,Y)*onBody;
+    float u=dot(q,normalize(vec2(0.75,0.62)))*7.5+0.9*vnoise(q*2.2);
+    float foldM=0.05*sqrt(abs(sin(u)));
+    float garM=body+0.045+foldM*sat((ynM-Y)*3.+0.2);
+    z=mix(z,max(z,garM),gM*lm);
+    garAmt=max(garAmt,gM*lm);
+    vec2 bc=vec2(-0.88,-1.62);
+    float br=length(q-bc);
+    float brooch=capE(q,bc,vec2(0.12),0.06,0.4)+0.012*vg(br-0.08,0.012)-0.018*vg(br-0.045,0.01)+0.02*capE(q,bc,vec2(0.028),1.,0.5);
+    z=mix(z,max(z,garM+brooch),lm*sat(brooch*60.)*onBody);
+  }
+
+  float hairAmt=0.;
+  /* ---- first face: hair parted and waved, bound with a fillet ---- */
+  {
+    vec2 hc=vec2(0.,-0.17);vec2 hr=vec2(0.68,0.955);
+    float rho=length((q-hc)/hr);
+    float ang=atan(abs(X),Y-hc.y);
+    float edge=0.03*sin(ang*7.+0.6);
+    float hm=capE(q,vec2(0.,0.16),vec2(1.0+edge,1.16+edge),0.33,0.5);
+    // waves: crests running back from the face, locks running around it
+    float wave=sin(ang*7.+rho*5.5);
+    float rr=rho+0.05*wave;
+    float cut;
+    float tf=tufts(vec2(ang*1.05,rr*0.62),0.058,3.2,5.,cut);
+    float part=vg(X,0.035)*smoothstep(0.62,0.85,Y);
+    float zh=hm+0.055*tf+0.03*wave*sat((rho-1.)*6.)-0.05*part;
+    // fillet across the hair
+    float fb=abs(rho-1.24);
+    float fil=smoothstep(0.05,0.044,fb);
+    zh=mix(zh,hm+0.06-0.007*vg(fb-0.028,0.009),fil);
+    float wW=(1.-lm);
+    float mask=wW*smoothstep(1.0,1.02,rho)*step(0.001,hm);
+    z=mix(z,max(z,zh),mask);
+    hairAmt=max(hairAmt,mask*(1.-fil*0.6));
+    deep=max(deep,mask*(1.-fil)*cut*0.35);
+  }
+  /* ---- second face: cropped locks whorling from the crown ---- */
+  {
+    float rhoM=length((q-vec2(yaw*0.1,-0.30))/vec2(0.72,1.03));
+    float hm=capE(q,vec2(0.,0.28),vec2(0.86,1.0),0.335,0.5);
+    vec2 cd=q-vec2(0.10,1.42);
+    float cang=atan(cd.x,-cd.y);
+    float cr2=length(cd);
+    float cut;
+    float tf=tufts(vec2(cr2,cang*(0.25+0.45*cr2)+0.05*sin(cr2*9.)),0.10,1.6,3.,cut);
+    float zh=hm+0.05*tf;
+    float mask=lm*smoothstep(1.0,1.025,rhoM)*smoothstep(-0.05,0.08,Y)*step(0.001,hm);
+    z=mix(z,max(z,zh),mask);
+    hairAmt=max(hairAmt,mask);
+    deep=max(deep,mask*cut*0.5);
+  }
+  /* ---- second face: beard and moustache ---- */
+  {
+    float bxc=yaw*0.3;
+    float aX=abs(X-bxc);
+    float cheekLine=-0.12-0.36*sat(1.-aX/0.78);
+    float ub=(X-bxc)*(1.0+0.7*sat(-(Y+0.55)))+0.05*sin(Y*7.+X*2.);
+    float cut;
+    float tf=tufts(vec2(-Y,ub),0.10,1.55,11.,cut);
+    float scal=0.05*sqrt(abs(sin(ub*15.)));
+    float taperB=1.-0.38*sat(-(Y+0.85)/0.5);
+    float zbm=capE(q,vec2(bxc,-0.82),vec2(0.80*taperB,0.58+scal),0.37,0.55);
+    float zb=zbm+0.055*tf;
+    vec2 M=vec2(yaw*0.45,-0.655);
+    vec2 lq=(q-M-vec2(0.,-0.05))/vec2(0.135,0.05);
+    float lip=smoothstep(1.0,0.35,dot(lq,lq));
+    z+=lm*0.03*lip;
+    float mask=lm*smoothstep(cheekLine+0.015,cheekLine-0.015,Y)*step(0.001,zbm)*(1.-lip);
+    z=mix(z,max(z,zb),mask);
+    // moustache: two drooping lobes of strands from the philtrum
+    vec2 mo=q-M;
+    float ax=abs(mo.x);
+    float yc=0.052-0.42*ax*ax;
+    float w=0.048*sat(1.-pow(ax/0.36,2.))+0.004;
+    float dy=(mo.y-yc)/w;
+    float lobe=sqrt(sat(1.-dy*dy))*smoothstep(0.37,0.30,ax);
+    float str=sqrt(abs(sin(dy*3.2+ax*6.)));
+    float zmo=z+0.045*lobe+0.012*str*lobe;
+    float mmask=lm*sat(lobe*12.);
+    z=mix(z,max(z,zmo),mmask);
+    hairAmt=max(hairAmt,max(mask,mmask));
+    deep=max(deep,mask*cut*0.5);
+  }
+
+  return vec4(max(z,0.),hairAmt,garAmt,deep);
+}
+
+void main(){
+  vec2 p=uDomain.xy+vUv*uDomain.zw;
+  G=uM;
+  float h=wallH(p);
+  float polish=0.,slab=0.,deep=0.;
+  float s=slabSDF(p);
+  if(s<0.){
+    slab=1.;
+    float t=sat(-s/0.014);
+    float hs=SLAB_TOP-0.022*(1.-t)*(1.-t);
+    // weathering of the slab's face
+    hs-=0.0025*smoothstep(0.55,0.85,fbm(p*9.+4.));
+    polish=0.35;
+    float pd=-panelSDF(p);
+    if(pd>0.){
+      float hm=SLAB_TOP+mold(pd);
+      polish=mix(0.45,0.12,smoothstep(0.03,0.05,pd));
+      hs=min(hs,hm+ (hs-SLAB_TOP));
+      if(pd>0.02){
+        const float FS=0.36;const vec2 FC=vec2(0.,0.09);const float DK=0.95;
+        vec4 fg=figure((p-FC)/FS);
+        float clip=smoothstep(0.022,0.05,pd);
+        float hf=SLAB_TOP+mold(1.)+fg.x*FS*DK*clip;
+        if(hf>hs){
+          float fig=smoothstep(0.0,0.012,fg.x*clip);
+          polish=mix(polish,mix(1.0,0.55,max(fg.y,fg.z*0.6)),fig);
+          deep=fg.w*fig;
+          hs=hf;
+        }
+      }
+    }
+    h=max(h,hs);
+  }
+  gl_FragColor=vec4(h,polish,slab,deep);
+}
+`;
+
+/* ------------------------------------------------------------------ */
+/*  Display shader: grazing sun, soft heightfield shadows, stone       */
+/* ------------------------------------------------------------------ */
+const VERT = /* glsl */`
+uniform sampler2D uHeight;
+uniform vec4 uDomain;
+uniform float uDisplace;
+varying vec2 vP;
+varying vec3 vW;
+void main(){
+  vec4 wp=modelMatrix*vec4(position,1.);
+  vec2 uv=(wp.xy-uDomain.xy)/uDomain.zw;
+  float h=0.;
+  if(uDisplace>0.5) h=texture2D(uHeight,uv).r;
+  wp.z+=h;
+  vP=wp.xy;vW=wp.xyz;
+  gl_Position=projectionMatrix*viewMatrix*wp;
+}`;
+
+const FRAG = /* glsl */`
+precision highp float;
+uniform sampler2D uHeight;
+uniform vec4 uDomain;
+uniform vec2 uTexel;
+uniform vec3 uL;
+uniform float uTime;
+uniform float uFade;
+uniform vec2 uRes;
+varying vec2 vP;
+varying vec3 vW;
+${COMMON}
+
+vec4 S(vec2 p){
+  vec2 uv=(p-uDomain.xy)/uDomain.zw;
+  if(uv.x<0.||uv.y<0.||uv.x>1.||uv.y>1.) return vec4(wallH(p),0.,0.,0.);
+  return texture2D(uHeight,uv);
+}
+float H(vec2 p){return S(p).r;}
+
+float softShadow(vec2 p,float h0,vec3 L){
+  vec2 d2=normalize(L.xy);float slope=L.z/length(L.xy);
+  const float PEN=0.075;
+  float res=1.;float t=0.0035;
+  for(int i=0;i<44;i++){
+    float rayH=h0+t*slope;
+    if(rayH>0.19) break;
+    float h=H(p+d2*t);
+    res=min(res,(rayH-h)/(t*PEN));
+    if(res<-1.) break;
+    t+=max(0.0022,t*0.085);
+  }
+  res=clamp(res,-1.,1.);
+  return smoothstep(-1.,1.,res);
+}
+
+vec3 aces(vec3 x){return clamp((x*(2.51*x+0.03))/(x*(2.43*x+0.59)+0.14),0.,1.);}
+
+float pitsF(vec2 p){
+  vec2 ip=floor(p),fp=fract(p);float r=0.;
+  for(int j=-1;j<=1;j++)for(int i=-1;i<=1;i++){
+    vec2 o=vec2(i,j);vec2 h=hash22(ip+o);
+    float rad=0.10+0.22*h.x*h.x;
+    float d=length(fp-o-h);
+    r=max(r,step(0.80,h.y)*smoothstep(rad,rad*0.35,d));
+  }
+  return r;
+}
+float polishG;
+float micro(vec2 p,float rough,float field){
+  float n=fbm3(p*48.)*0.0011+vnoise(p*140.)*0.00028;
+  float pits=(pitsF(p*48.)*0.0014+pitsF(p*17.+3.)*0.0022)*(1.-0.85*smoothstep(0.5,0.9,polishG));
+  // claw-chisel tooling on the field
+  float ta=vnoise(p*5.)*3.14;
+  vec2 td=vec2(cos(ta),sin(ta));
+  float tool=sin(dot(p,td)*430.+vnoise(p*30.)*5.)*0.00028*field;
+  return (n-pits)*rough+tool;
+}
+
+void main(){
+  vec2 p=vP;
+  vec4 s0=S(p);
+  float h0=s0.r,polish=s0.g,slab=s0.b,deep=s0.a;
+  polishG=polish;
+
+  // macro normal from the carved heightfield
+  float e=uTexel.x*1.25;
+  float hx1=H(p+vec2(e,0.)),hx0=H(p-vec2(e,0.));
+  float hy1=H(p+vec2(0.,e)),hy0=H(p-vec2(0.,e));
+  vec3 n=normalize(vec3(-(hx1-hx0)/(2.*e),-(hy1-hy0)/(2.*e),1.));
+
+  // curvature: grime settles in the hollows, ridges wear pale
+  float ce=0.006;
+  float lap=(H(p+vec2(ce,0.))+H(p-vec2(ce,0.))+H(p+vec2(0.,ce))+H(p-vec2(0.,ce)))*0.25-h0;
+  float cav=lap/ce;
+
+  // micro relief of the stone itself
+  float field=slab*(1.-smoothstep(0.1,0.3,polish));
+  float rough=mix(1.0,0.30,smoothstep(0.3,1.0,polish))*mix(0.8,1.,slab);
+  float me=0.0014;
+  float m0=micro(p,rough,field);
+  float mx=micro(p+vec2(me,0.),rough,field);
+  float my=micro(p+vec2(0.,me),rough,field);
+  n=normalize(n+vec3(-(mx-m0)/me,-(my-m0)/me,0.)*0.9);
+
+  vec3 L=normalize(uL);
+  float sh=softShadow(p,h0+0.0006,L);
+
+  // ambient occlusion from the surrounding heights
+  float occ=0.;
+  float ra=hash12(p*731.)*6.28;
+  for(int i=0;i<8;i++){
+    float a=float(i)*0.7854+ra;vec2 d=vec2(cos(a),sin(a));
+    occ+=sat((H(p+d*0.014)-h0)/0.014*0.9);
+    occ+=sat((H(p+d*0.045)-h0)/0.045*0.9)*0.8;
+  }
+  float ao=1.-occ/14.4;
+  ao=clamp(ao,0.,1.);ao=ao*ao*(3.-2.*ao);
+
+  // material
+  float mott=fbm(p*2.1+11.);float mott2=fbm3(p*8.5+3.);
+  vec3 lime=vec3(0.76,0.70,0.60)*(0.86+0.24*mott)*(0.95+0.09*mott2);
+  float streak=fbm(vec2(p.x*16.,p.y*1.1)+5.);
+  lime=mix(lime,lime*vec3(0.80,0.82,0.80),smoothstep(0.5,0.78,streak)*0.55);
+  float lich=smoothstep(0.62,0.8,fbm(p*4.+21.))*smoothstep(0.2,0.5,1.-polish);
+  lime=mix(lime,lime*vec3(0.84,0.84,0.74),lich*0.6);
+  float sp=hash12(floor(p*230.));
+  lime*=1.-0.22*step(0.975,sp)*(1.-polish*0.5);
+  float blockId=hash12(floor((p/vec2(0.92,0.46)+vec2(0.31,0.27)+vec2(mod(floor(p.y/0.46+0.27),2.)*0.5,0.))));
+  vec3 wall=vec3(0.40,0.375,0.345)*(0.78+0.3*fbm(p*2.6))*(0.86+0.22*blockId);
+  vec3 alb=mix(wall,lime,slab);
+  alb=mix(alb,alb*1.05+0.012,polish*slab*0.5);
+  alb*=1.-0.42*sat(cav*0.9);
+  alb*=1.+0.14*sat(-cav*0.6);
+  alb*=1.-0.38*deep;
+  alb*=0.72+0.28*ao;
+
+  // light
+  vec3 V=normalize(cameraPosition-vW);
+  float pool=0.42+0.58*exp(-dot(p*vec2(0.55,0.72),p*vec2(0.55,0.72))*1.4);
+  vec3 sun=vec3(1.0,0.82,0.60)*2.9*pool;
+  float ndl=max(dot(n,L),0.);
+  float diff=ndl*sh;
+  vec3 Hh=normalize(L+V);
+  float spec=pow(max(dot(n,Hh),0.),mix(10.,46.,polish))*mix(0.015,0.09,polish)*sh*ndl*slab;
+  vec3 sky=vec3(0.30,0.37,0.48)*0.19*(0.5+0.5*n.z);
+  vec3 bounce=vec3(0.55,0.42,0.30)*0.16*sat(0.5-0.5*dot(n.xy,normalize(L.xy)));
+  vec3 col=alb*(sun*diff+(sky+bounce)*ao)+sun*spec;
+
+  // air: a faint warm haze in the light, darkness gathering at the edges
+  vec2 sc=gl_FragCoord.xy/uRes;
+  float vig=smoothstep(1.25,0.25,length((sc-0.5)*vec2(uRes.x/uRes.y,1.)*1.1));
+  col*=mix(0.35,1.0,vig);
+  col=aces(col*0.72);
+  col=pow(col,vec3(1./2.2));
+  col*=uFade;
+  col+=(hash12(gl_FragCoord.xy+fract(uTime*7.)*100.)-0.5)*0.018;
+  gl_FragColor=vec4(col,1.);
+}`;
+
+/* ------------------------------------------------------------------ */
+/*  Setup                                                              */
+/* ------------------------------------------------------------------ */
+const canvas=document.getElementById('c');
+let renderer;
+try{
+  renderer=new THREE.WebGLRenderer({canvas,antialias:true,powerPreference:'high-performance',preserveDrawingBuffer:location.hash.indexOf('manual')>=0});
+}catch(err){
+  document.body.insertAdjacentHTML('beforeend','<div class="err">This piece needs WebGL.</div>');
+  throw err;
+}
+const DPR=Math.min(window.devicePixelRatio||1,1.75);
+renderer.setPixelRatio(DPR);
+renderer.setSize(innerWidth,innerHeight);
+
+const floatLinear=renderer.extensions.has('OES_texture_float_linear');
+const DOMAIN={x:-0.96,y:-1.12,w:1.92,h:2.24};
+const TEX=0.0015;
+const RTW=Math.round(DOMAIN.w/TEX),RTH=Math.round(DOMAIN.h/TEX);
+const rt=new THREE.WebGLRenderTarget(RTW,RTH,{
+  type:floatLinear?THREE.FloatType:THREE.HalfFloatType,
+  format:THREE.RGBAFormat,
+  minFilter:THREE.LinearFilter,magFilter:THREE.LinearFilter,
+  depthBuffer:false,stencilBuffer:false,generateMipmaps:false
+});
+rt.texture.colorSpace=THREE.NoColorSpace;
+
+const domainV=new THREE.Vector4(DOMAIN.x,DOMAIN.y,DOMAIN.w,DOMAIN.h);
+
+const hScene=new THREE.Scene();
+const hCam=new THREE.OrthographicCamera(-1,1,1,-1,0,1);
+const hMat=new THREE.ShaderMaterial({
+  uniforms:{uDomain:{value:domainV},uM:{value:0}},
+  vertexShader:`varying vec2 vUv;void main(){vUv=uv;gl_Position=vec4(position.xy,0.,1.);}`,
+  fragmentShader:HEIGHT_FRAG,depthTest:false,depthWrite:false
+});
+hScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2,2),hMat));
+
+const scene=new THREE.Scene();
+scene.background=new THREE.Color(0x0d0c0b);
+const camera=new THREE.PerspectiveCamera(30,innerWidth/innerHeight,0.1,50);
+
+const uniforms={
+  uHeight:{value:rt.texture},
+  uDomain:{value:domainV},
+  uTexel:{value:new THREE.Vector2(TEX,TEX)},
+  uL:{value:new THREE.Vector3(-0.9,0.3,0.35)},
+  uTime:{value:0},
+  uFade:{value:0},
+  uRes:{value:new THREE.Vector2(innerWidth*DPR,innerHeight*DPR)},
+  uDisplace:{value:1}
+};
+const reliefMat=new THREE.ShaderMaterial({uniforms,vertexShader:VERT,fragmentShader:FRAG});
+const wallUniforms=Object.assign({},uniforms,{uDisplace:{value:0}});
+const wallMat=new THREE.ShaderMaterial({uniforms:wallUniforms,vertexShader:VERT,fragmentShader:FRAG});
+
+const relief=new THREE.Mesh(new THREE.PlaneGeometry(DOMAIN.w,DOMAIN.h,560,650),reliefMat);
+relief.position.set(DOMAIN.x+DOMAIN.w/2,DOMAIN.y+DOMAIN.h/2,0);
+scene.add(relief);
+const wallMesh=new THREE.Mesh(new THREE.PlaneGeometry(14,9,1,1),wallMat);
+wallMesh.position.z=-0.0004;
+scene.add(wallMesh);
+
+/* ------------------------------------------------------------------ */
+/*  Scroll -> memory of the stone                                      */
+/* ------------------------------------------------------------------ */
+const ui=document.getElementById('ui');
+const dot=document.getElementById('dot');
+const hint=document.getElementById('hint');
+const n1=document.getElementById('n1'),n2=document.getElementById('n2');
+
+function progress(){
+  const max=Math.max(1,document.documentElement.scrollHeight-innerHeight);
+  return Math.min(1,Math.max(0,scrollY/max));
+}
+const smooth=(a,b,x)=>{const t=Math.min(1,Math.max(0,(x-a)/(b-a)));return t*t*(3-2*t);};
+let mShown=smooth(0.03,0.97,progress());
+let lastM=-1;
+let pointer={x:0,y:0},pointerS={x:0,y:0};
+addEventListener('pointermove',e=>{pointer.x=e.clientX/innerWidth-0.5;pointer.y=e.clientY/innerHeight-0.5;});
+addEventListener('scroll',()=>{if(scrollY>8)hint.classList.add('gone');},{passive:true});
+
+function frameCamera(){
+  const aspect=innerWidth/innerHeight;
+  camera.aspect=aspect;
+  const vfov=camera.fov*Math.PI/180;
+  const needH=2.18, needW=1.62;
+  const dH=needH/(2*Math.tan(vfov/2));
+  const dW=needW/(2*Math.tan(vfov/2)*aspect);
+  camera.userData.dist=Math.max(dH,dW);
+  camera.updateProjectionMatrix();
+}
+frameCamera();
+addEventListener('resize',()=>{
+  renderer.setSize(innerWidth,innerHeight);
+  uniforms.uRes.value.set(innerWidth*DPR,innerHeight*DPR);
+  frameCamera();
+});
+
+const clock=new THREE.Clock();
+let t0=performance.now();
+function tick(){
+  const now=performance.now();
+  const t=(now-t0)/1000;
+  const dt=Math.min(clock.getDelta(),0.05);
+
+  // morph follows scroll with a gentle lag
+  const target=smooth(0.03,0.97,progress());
+  mShown+=(target-mShown)*(1-Math.exp(-dt*4.2));
+  if(Math.abs(target-mShown)<0.0004) mShown=target;
+  if(Math.abs(mShown-lastM)>0.00015){
+    hMat.uniforms.uM.value=mShown;
+    renderer.setRenderTarget(rt);
+    renderer.render(hScene,hCam);
+    renderer.setRenderTarget(null);
+    lastM=mShown;
+  }
+
+  // the afternoon sun drifting across the wall
+  const az=0.30+0.30*Math.sin(t*0.085+0.4)+0.08*Math.sin(t*0.031);
+  const el=0.23+0.05*Math.sin(t*0.06+1.1);
+  uniforms.uL.value.set(-Math.cos(el)*Math.cos(az),Math.cos(el)*Math.sin(az),Math.sin(el));
+  uniforms.uTime.value=t;
+  uniforms.uFade.value=Math.min(1,smooth(0.0,2.4,t)*1.0);
+  wallUniforms.uFade=uniforms.uFade;
+
+  // a slow breathing camera, barely there
+  pointerS.x+=(pointer.x-pointerS.x)*0.03;pointerS.y+=(pointer.y-pointerS.y)*0.03;
+  const d=camera.userData.dist;
+  camera.position.set(0.16+0.05*Math.sin(t*0.11)-pointerS.x*0.25,-0.08+0.03*Math.sin(t*0.083)+pointerS.y*0.18,d);
+  camera.lookAt(0.0,0.0,0.05);
+
+  // ui
+  dot.style.left=(mShown*100).toFixed(2)+'%';
+  n1.classList.toggle('on',mShown<0.5);n2.classList.toggle('on',mShown>=0.5);
+
+  renderer.render(scene,camera);
+  requestAnimationFrame(tick);
+}
+const MANUAL=location.hash.indexOf('manual')>=0;
+if(MANUAL){
+  // test hook: render a single frame at a given morph and time
+  window.__frame=(m,t)=>{
+    hMat.uniforms.uM.value=m;renderer.setRenderTarget(rt);renderer.render(hScene,hCam);renderer.setRenderTarget(null);
+    const az=0.30+0.30*Math.sin(t*0.085+0.4)+0.08*Math.sin(t*0.031);
+    const el=0.23+0.05*Math.sin(t*0.06+1.1);
+    uniforms.uL.value.set(-Math.cos(el)*Math.cos(az),Math.cos(el)*Math.sin(az),Math.sin(el));
+    uniforms.uFade.value=1;uniforms.uTime.value=t;
+    const d=camera.userData.dist;
+    camera.position.set(0.16+0.05*Math.sin(t*0.11),-0.08+0.03*Math.sin(t*0.083),d);
+    camera.lookAt(0,0,0.05);
+    dot.style.left=(m*100).toFixed(2)+'%';
+    renderer.render(scene,camera);
+    return true;
+  };
+  ui.classList.add('ready');
+}else requestAnimationFrame(()=>{ui.classList.add('ready');tick();});
+</script>
+</body>
+</html>
