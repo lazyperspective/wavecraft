@@ -66,12 +66,16 @@ const initScript = ({ maxSec, sr, audioOnly }) => {
   // node disconnected after its note ends would be silent for the whole render.
   // Keep everything connected; finished sources simply output silence.
   AudioNode.prototype.disconnect = function () {};
-  // while fast-forwarding (audio-only, or before a chunk's first frame) skip the expensive draw calls
+  // while fast-forwarding (audio-only, before a chunk's first frame, or between --hz sub-steps) skip on-screen draws
   let drawOn = !audioOnly;
   for (const C of [WebGLRenderingContext, WebGL2RenderingContext])
     for (const m of ['drawArrays', 'drawElements', 'drawArraysInstanced', 'drawElementsInstanced', 'drawRangeElements']) {
       const orig = C.prototype[m];
-      if (orig) C.prototype[m] = function (...a) { if (drawOn) return orig.apply(this, a); };
+      // offscreen passes (render targets, shadow maps, baked textures) always run, since pages
+      // may cache them across frames; only the final on-screen draw is skipped
+      if (orig) C.prototype[m] = function (...a) {
+        if (drawOn || (!audioOnly && this.getParameter(this.FRAMEBUFFER_BINDING) !== null)) return orig.apply(this, a);
+      };
     }
   const animStart = new WeakMap();
   function FakeAudioContext() {
