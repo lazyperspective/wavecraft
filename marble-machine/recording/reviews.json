@@ -1,26 +1,126 @@
 [
- {"key":"opus","video":"videos/opus-5.5-high.mp4","eyebrow":"Model 1 of 4","name":"Opus 5.5","effort":"high reasoning effort","tune":"Brahms' Lullaby, with a bass line","score":7.0,
-  "notes":[
-   {"kind":"good","label":"Ambition","text":"The most ambitious machine: a glowing brass lantern with a screw lift and eleven gated tracks."},
-   {"kind":"good","label":"Motion","text":"Marbles truly circulate: lifted, queued, released, then they swirl down the bowl and go round again."},
-   {"kind":"bad","label":"Clarity","text":"So much moves at once that it's hard to tell which marble played which note. Struck bars flare white."},
-   {"kind":"mid","label":"Sound","text":"Warm bell tone with a bass line, but the rhythm drifts and stray ticks blur the tune."}]},
- {"key":"fable","video":"videos/fable-5.2-medium.mp4","eyebrow":"Model 2 of 4","name":"Fable 5.2","effort":"medium reasoning effort","tune":"Frère Jacques, as a four-voice round","score":7.5,
-  "notes":[
-   {"kind":"good","label":"Idea","text":"The cleverest musical idea: the spiral of 32 bars is the score, and four marbles play it as a round."},
-   {"kind":"good","label":"Clarity","text":"Easy to follow. Each marble has its own colour, and the bar it hits glows in that colour."},
-   {"kind":"good","label":"Sound","text":"In tune and on time. The round thins out and rebuilds, so the loop never feels like a restart."},
-   {"kind":"mid","label":"Looks","text":"Calm but a little plain. The machine sits small in the frame and the marbles look like plastic."}]},
- {"key":"sol","video":"videos/sol-6.1-high.mp4","eyebrow":"Model 3 of 4","name":"Sol 6.1","effort":"high reasoning effort","tune":"Ode to Joy","score":8.5,
-  "notes":[
-   {"kind":"good","label":"Craft","text":"Looks like a real object: warm walnut, brass rails, glass marble tubes, soft shadows and a gentle light."},
-   {"kind":"good","label":"Clarity","text":"One lane per bar, low to high, so you can always see which marble plays which note."},
-   {"kind":"good","label":"Sound","text":"All four phrases of Ode to Joy, every note right and in time, with a clean marimba tone."},
-   {"kind":"mid","label":"Trade-off","text":"The safest design of the four: a straight row of tracks. Marbles are small, and the on-screen text competes a little."}]},
- {"key":"gemini","video":"videos/gemini-hydrogen.mp4","eyebrow":"Model 4 of 4","name":"Gemini Hydrogen","effort":"effort not specified","tune":"Brahms' Lullaby","score":5.5,
-  "notes":[
-   {"kind":"good","label":"Sound","text":"The tune is right and steady, with a soft bell tone and a calm pause before each repeat."},
-   {"kind":"bad","label":"Physics","text":"After hitting a bar, marbles hover in mid-air in front of it instead of rolling down the ramp."},
-   {"kind":"mid","label":"Looks","text":"Tidy layout, but the brass and bars look flat and plastic, and the clear marbles are hard to see."},
-   {"kind":"bad","label":"Camera","text":"The orbit swings close and low, so the machine is often cropped or seen through its own frame."}]}
+ {
+  "key": "opus",
+  "video": "videos/opus-5.5-high.mp4",
+  "eyebrow": "Model 1 of 4",
+  "name": "Opus 5.5",
+  "effort": "high reasoning effort",
+  "tune": "Brahms' Lullaby, with a bass line",
+  "score": 8.0,
+  "notes": [
+   {
+    "kind": "good",
+    "label": "Ambition",
+    "text": "The most ambitious machine: a glowing brass lantern with a screw lift and eleven gated tracks."
+   },
+   {
+    "kind": "good",
+    "label": "Motion",
+    "text": "Marbles truly circulate: lifted, queued, released, then they swirl down the bowl and go round again."
+   },
+   {
+    "kind": "bad",
+    "label": "Clarity",
+    "text": "So much moves at once that it's hard to tell which marble played which note. Struck bars flare white."
+   },
+   {
+    "kind": "mid",
+    "label": "Sound",
+    "text": "Warm bell tone with a bass line, but the rhythm drifts and stray ticks blur the tune."
+   }
+  ]
+ },
+ {
+  "key": "fable",
+  "video": "videos/fable-5.2-medium.mp4",
+  "eyebrow": "Model 2 of 4",
+  "name": "Fable 5.2",
+  "effort": "medium reasoning effort",
+  "tune": "Frère Jacques, as a four-voice round",
+  "score": 8.5,
+  "notes": [
+   {
+    "kind": "good",
+    "label": "Idea",
+    "text": "The cleverest musical idea: the spiral of 32 bars is the score, and four marbles play it as a round."
+   },
+   {
+    "kind": "good",
+    "label": "Clarity",
+    "text": "Easy to follow. Each marble has its own colour, and the bar it hits glows in that colour."
+   },
+   {
+    "kind": "good",
+    "label": "Sound",
+    "text": "In tune and on time. The round thins out and rebuilds, so the loop never feels like a restart."
+   },
+   {
+    "kind": "mid",
+    "label": "Looks",
+    "text": "Calm but a little plain. The machine sits small in the frame and the marbles look like plastic."
+   }
+  ]
+ },
+ {
+  "key": "sol",
+  "video": "videos/sol-6.1-high.mp4",
+  "eyebrow": "Model 3 of 4",
+  "name": "Sol 6.1",
+  "effort": "high reasoning effort",
+  "tune": "Ode to Joy",
+  "score": 6.5,
+  "notes": [
+   {
+    "kind": "good",
+    "label": "Craft",
+    "text": "Looks like a real object: warm walnut, brass rails, glass marble tubes, soft shadows and a gentle light."
+   },
+   {
+    "kind": "good",
+    "label": "Clarity",
+    "text": "One lane per bar, low to high, so you can always see which marble plays which note."
+   },
+   {
+    "kind": "good",
+    "label": "Sound",
+    "text": "All four phrases of Ode to Joy, every note right and in time, with a clean marimba tone."
+   },
+   {
+    "kind": "mid",
+    "label": "Trade-off",
+    "text": "The safest design of the four: a straight row of tracks. Marbles are small, and the on-screen text competes a little."
+   }
+  ]
+ },
+ {
+  "key": "gemini",
+  "video": "videos/gemini-hydrogen.mp4",
+  "eyebrow": "Model 4 of 4",
+  "name": "Gemini Hydrogen",
+  "effort": "effort not specified",
+  "tune": "Brahms' Lullaby",
+  "score": 7.0,
+  "notes": [
+   {
+    "kind": "good",
+    "label": "Sound",
+    "text": "The tune is right and steady, with a soft bell tone and a calm pause before each repeat."
+   },
+   {
+    "kind": "bad",
+    "label": "Physics",
+    "text": "After hitting a bar, marbles hover in mid-air in front of it instead of rolling down the ramp."
+   },
+   {
+    "kind": "mid",
+    "label": "Looks",
+    "text": "Tidy layout, but the brass and bars look flat and plastic, and the clear marbles are hard to see."
+   },
+   {
+    "kind": "bad",
+    "label": "Camera",
+    "text": "The orbit swings close and low, so the machine is often cropped or seen through its own frame."
+   }
+  ]
+ }
 ]

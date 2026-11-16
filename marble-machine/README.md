@@ -19,12 +19,12 @@ Two more builds from the same brief were added later: Sol 6.1 (high) in [`sol-6.
 
 | Model | Tune | Score |
 |---|---|---|
-| Sol 6.1 (high) | Ode to Joy | 8.5 |
-| Fable 5.2 (medium) | Frère Jacques, as a round | 7.5 |
-| Opus 5.5 (high) | Brahms' Lullaby, with bass | 7.0 |
-| Gemini Hydrogen | Brahms' Lullaby | 5.5 |
+| Fable 5.2 (medium) | Frère Jacques, as a round | 8.5 |
+| Opus 5.5 (high) | Brahms' Lullaby, with bass | 8.0 |
+| Gemini Hydrogen | Brahms' Lullaby | 7.0 |
+| Sol 6.1 (high) | Ode to Joy | 6.5 |
 
-The scores and comments in [`recording/reviews.json`](recording/reviews.json) were written by Claude Opus 5.5, which is also one of the four contestants. They rest on frames from across each recording and on the notes detected in each soundtrack ([`recording/notes.py`](recording/notes.py)). Volumes were evened out so no build sounds better just for being louder.
+The ranking above is the project owner's. The comments on each card in [`recording/reviews.json`](recording/reviews.json) were written by Claude Opus 5.5, which is also one of the four contestants. They rest on frames from across each recording and on the notes detected in each soundtrack ([`recording/notes.py`](recording/notes.py)). Volumes were evened out so no build sounds better just for being louder.
 
 ## How the videos were made
 
