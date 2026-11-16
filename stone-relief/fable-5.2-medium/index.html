@@ -1,0 +1,582 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Two Faces in Stone</title>
+<style>
+  :root { --ink: 236, 226, 208; }
+  html, body { margin: 0; background: #14110e; }
+  body { height: calc(100vh + 2300px); overflow-x: hidden;
+    font-family: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+    color: rgba(var(--ink), .62); -webkit-font-smoothing: antialiased; text-shadow: 0 1px 6px rgba(0,0,0,.55); }
+  canvas#c { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+  .ui { position: fixed; pointer-events: none; z-index: 2; transition: opacity 1.6s ease; }
+  #label { left: 38px; bottom: 34px; font-size: 12.5px; line-height: 1.65; letter-spacing: .04em; opacity: 0; }
+  #label b { display: block; font-weight: 400; font-size: 11px; letter-spacing: .34em; text-transform: uppercase;
+    color: rgba(var(--ink), .78); margin-bottom: 5px; }
+  #label i { color: rgba(var(--ink), .46); }
+  #hint { right: 50px; bottom: 30px; transform: translateX(50%); text-align: center; font-size: 10.5px;
+    letter-spacing: .42em; text-transform: uppercase; text-indent: .42em; color: rgba(var(--ink), .5); opacity: 0; }
+  #hint span { display: block; width: 1px; height: 30px; margin: 10px auto 0;
+    background: linear-gradient(rgba(var(--ink), .55), rgba(var(--ink), 0)); transform-origin: top;
+    animation: drip 3.2s cubic-bezier(.5, 0, .3, 1) infinite; }
+  @keyframes drip { 0% { transform: scaleY(0); opacity: 0 } 35% { transform: scaleY(1); opacity: 1 } 100% { transform: scaleY(1) translateY(14px); opacity: 0 } }
+  #rail { right: 40px; top: 50%; height: 190px; margin-top: -95px; width: 20px; opacity: 0;
+    font-size: 11px; letter-spacing: .1em; text-align: center; }
+  #rail .line { position: absolute; left: 50%; top: 24px; bottom: 24px; width: 1px; background: rgba(var(--ink), .2); }
+  #rail .dot { position: absolute; left: 50%; top: 24px; width: 5px; height: 5px; margin: -2.5px 0 0 -2.5px;
+    border-radius: 50%; background: rgba(var(--ink), .85); box-shadow: 0 0 10px rgba(255, 220, 170, .5); }
+  #rail .a, #rail .b { position: absolute; left: 0; right: 0; transition: color .8s; }
+  #rail .a { top: 0 } #rail .b { bottom: 0 }
+  #fallback { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; font-size: 14px; letter-spacing: .08em; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div class="ui" id="label"><b>Two Faces in Stone</b>Low relief, limestone<br><i>one slab, two sitters</i></div>
+<div class="ui" id="hint">Scroll<span></span></div>
+<div class="ui" id="rail"><div class="a">I</div><div class="line"></div><div class="dot"></div><div class="b">II</div></div>
+<div id="fallback">This piece needs WebGL 2.</div>
+
+<script type="importmap">{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }</script>
+<script type="module">
+import * as THREE from 'three';
+
+/* ------------------------------------------------------------------ *
+ *  The two sitters. Every number is a dimension of the carving, in    *
+ *  "face units" (chin at y = -1, crown near +1). The stone moves      *
+ *  between the two columns; nothing is ever cross-faded.              *
+ *  [ name, her, him ]                                                 *
+ * ------------------------------------------------------------------ */
+const SITTERS = [
+  ['TILT', .05, -.035], ['TURN', .055, -.045],
+  ['CRY', .20, .20], ['CRW', 0.64, 0.7], ['CRH', .80, .78],
+  ['JWY', -0.34, -0.34], ['JWW', 0.5, 0.61], ['JWH', 0.6, 0.66], ['JAWN', 2.0, 2.9],
+  ['HEADH', .55, .57],
+  ['BROWR', 0.07, 0.13], ['BROWY', .25, .21],
+  ['EYEX', .295, .285], ['EYEY', .065, .05], ['EYETILT', .13, -.10], ['EYEW', .158, .13],
+  ['LIDU', .074, .046], ['LIDL', .042, .034],
+  ['SOCK', 0.19, 0.26], ['BALL', 0.075, 0.06], ['LIDR', 0.075, 0.08], ['CREASE', 0.0, 0.02], ['CREASEH', .036, .03],
+  ['IRIS', 0.006, 0.009], ['GAZE', .012, -.008], ['BAG', 0, .034],
+  ['BRY', .262, .178], ['BRARCH', .05, .018], ['BRSLANT', -.02, .10], ['BRH', 0.022, 0.09], ['BRT', 0.03, 0.045],
+  ['NTOP', .22, .20], ['NTIP', -.265, -.325], ['NBW', 0.036, 0.058], ['NTW', .072, .112],
+  ['NH', .30, .38], ['NHUMP', 0, .06], ['NTIPH', .075, .10], ['ALAX', .098, .145], ['ALAH', .065, .10], ['NOSTR', .05, .065],
+  ['MY', -0.53, -0.6], ['MW', .205, .235], ['SMILE', .014, -.02], ['BOW', .03, .008],
+  ['ULT', .058, .028], ['LLT', .078, .05], ['LIPH', .105, .07], ['MUZ', .07, .08], ['MLINE', 0.06, 0.045],
+  ['MCORN', .04, .03], ['SULC', .05, .02], ['CHINH', .085, .09], ['CHINY', -0.79, -0.86], ['CHINW', .15, .23],
+  ['CHK', 0.1, 0.07], ['CHKY', -.10, -.05], ['HOL', .015, .085], ['NASO', 0, .05], ['WRINK', 0, 0.05],
+  ['EARX', 0.6, 0.705], ['EARH', 0, 0.2],
+  ['HLY', 0.6, 0.63], ['HLK', 1.0, 0.5], ['HCY', -0.5, 0.22], ['HRX', 0.92, 0.77], ['HRY', 1.6, 0.86],
+  ['HAIRH', 0.52, 0.46], ['HTHICK', .085, .06], ['STRA', .036, 0], ['CURL', 0, 0.05], ['BAND', .05, 0], ['HLK6', 14, 3],
+  ['BEARD', 0, 1], ['BDTOP', -.46, -.44], ['BDK', 1.4, 1.5], ['BDY', -0.62, -0.8], ['BDRX', 0.34, 0.6], ['BDRY', 0.3, 0.7],
+  ['BDH', 0.2, 0.52], ['BDTHICK', 0, .085], ['BDTEX', 0, .042], ['MUST', 0, 0.14],
+  ['NKW', 0.265, 0.37], ['NKH', 0.24, 0.3],
+  ['SHY', -1.27, -1.27], ['SHS', 0.3, 0.15], ['SHH', .34, .40],
+  ['GNY', -1.52, -1.5], ['GNK', 0.4, 0.08], ['GND', 0, .30], ['CLOTH', .04, .06],
+  ['FOLDA', 0.03, 0], ['FOLDB', 0, 0.05], ['CLAV', .028, 0],
+];
+const NP = SITTERS.length;
+const defs = SITTERS.map((s, i) => `#define ${s[0]} ${i}`).join('\n');
+
+const NOISE = /* glsl */`
+float hash(vec2 p){ p = fract(p*vec2(123.34, 456.21)); p += dot(p, p+45.32); return fract(p.x*p.y); }
+float vnoise(vec2 p){
+  vec2 i = floor(p), f = fract(p); f = f*f*f*(f*(f*6.-15.)+10.);
+  return mix(mix(hash(i), hash(i+vec2(1,0)), f.x), mix(hash(i+vec2(0,1)), hash(i+vec2(1,1)), f.x), f.y);
+}
+float fbm(vec2 p){ float a=.5, s=0.; for(int i=0;i<5;i++){ s += a*vnoise(p); p = p*2.03+17.3; a *= .5; } return s; }
+float fbm3(vec2 p){ float a=.5, s=0.; for(int i=0;i<3;i++){ s += a*vnoise(p); p = p*2.03+17.3; a *= .5; } return s; }
+`;
+
+const SHARED = /* glsl */`
+float slabSD(vec2 sp){
+  const vec2 SH = vec2(.62, .86);
+  vec2 dd = abs(sp) - SH + .012;
+  float sd = length(max(dd, 0.)) + min(max(dd.x, dd.y), 0.) - .012;
+  sd += .007*(fbm3(sp*8. + 9.) - .45)*smoothstep(-.05, 0., sd);
+  float cut = dot(sp - vec2(SH.x, -SH.y), normalize(vec2(1., -.8))) + .085 + .03*(fbm3(sp*11.) - .5);
+  return max(sd, cut);
+}
+float detailH(vec2 w, float mat, float pol){
+  float grain = fbm3(w*52.)*.0019 + vnoise(w*118.)*.0007;
+  float pits = smoothstep(.60, .74, fbm3(w*30. + 3.))*.0022 + smoothstep(.63, .75, fbm3(w*11. + 8.))*.003;
+  float tool = vnoise(vec2(dot(w, vec2(.82, .57))*24., dot(w, vec2(-.57, .82))*120.))*.0017
+             + vnoise(vec2(dot(w, vec2(.5, .87))*18., dot(w, vec2(-.87, .5))*95.) + 4.)*.0009;
+  float rough = 1. - pol;
+  float slab = grain*(.6 + .4*rough) - pits*(.5 + .5*rough) + tool*rough*rough;
+  float wall = fbm(w*21.)*.0055 + vnoise(w*105.)*.0012 - smoothstep(.6, .74, fbm3(w*13.))*.003;
+  return mix(wall, slab, mat);
+}
+`;
+
+const VERT = /* glsl */`
+in vec3 position;
+void main(){ gl_Position = vec4(position.xy, 0., 1.); }`;
+
+/* ------------------------------------------------------------------ *
+ *  Pass 1 — the chisel. Writes the whole wall as a height field:      *
+ *  R height, G polish, B slab mask, A how restless the stone is.      *
+ * ------------------------------------------------------------------ */
+const HEIGHT_FRAG = /* glsl */`
+precision highp float;
+out vec4 o;
+uniform vec2 uRes; uniform float uScale; uniform float uT;
+uniform float PA[${NP}]; uniform float PB[${NP}];
+${defs}
+#define P(i) mix(PA[i], PB[i], t)
+${NOISE}
+${SHARED}
+float G(float x){ return exp(-x*x); }
+float G2(vec2 v){ return exp(-dot(v,v)); }
+float sq(float x){ return x*x; }
+float smax(float a, float b, float k){ float h = clamp(.5+.5*(a-b)/k, 0., 1.); return mix(b, a, h) + k*h*(1.-h); }
+float seg(vec2 p, vec2 a, vec2 b){ vec2 pa = p-a, ba = b-a; return length(pa - ba*clamp(dot(pa,ba)/dot(ba,ba), 0., 1.)); }
+
+// returns (height, polish)
+vec2 sitter(vec2 q, float t){
+  // --- head pose
+  vec2 piv = vec2(0., -.95);
+  float an = P(TILT); float ca = cos(an), sa = sin(an);
+  vec2 p = mat2(ca, -sa, sa, ca)*(q-piv) + piv;
+  float turn = P(TURN);
+  vec2 f = p; f.x -= turn*.9; f.x *= 1. + 1.3*turn*tanh(f.x*5.);
+  float ax = abs(f.x), sg = f.x < 0. ? -1. : 1.;
+
+  // --- skull and jaw
+  vec2 dc = (p - vec2(0., P(CRY)))/vec2(P(CRW), P(CRH));
+  vec2 dj = (p - vec2(0., P(JWY)))/vec2(P(JWW), P(JWH));
+  float jn = P(JAWN);
+  float qc = 1. - dot(dc, dc);
+  float qj = 1. - pow(abs(dj.x), jn) - pow(abs(dj.y), jn);
+  float qh = smax(qc, qj, .22);
+  float qhp = max(qh, 0.);
+  float head = P(HEADH)*(.42*sqrt(qhp) + .58*qhp*(1.6 - .6*qhp));
+  float fm = smoothstep(0., .16, qh);
+  float ft = 0.;
+
+  // --- brow ridge, temples
+  ft += P(BROWR)*G((f.y - P(BROWY))/.085)*G(f.x/.5);
+  ft -= .035*G2(vec2(ax - .5, f.y - .27)/vec2(.1, .16));
+
+  // --- eyes
+  float ex = P(EYEX), ey = P(EYEY), ew = P(EYEW);
+  vec2 e = vec2(ax - ex, f.y - ey); e.y -= P(EYETILT)*e.x;
+  ft -= P(SOCK)*G2(vec2(e.x, e.y - .03)/vec2(.19, .11));
+  ft -= P(SOCK)*.55*G2(vec2(ax - .135, f.y - ey - .035)/vec2(.065, .095));
+  float ee = 1. - sq(e.x/ew);
+  float up = P(LIDU)*ee, lo = -P(LIDL)*ee;
+  float din = min(up - e.y, e.y - lo);
+  float inside = smoothstep(0., .011, din);
+  float win = smoothstep(ew*1.22, ew*.92, abs(e.x));
+  ft += P(BALL)*inside*sqrt(max(1. - sq(e.x/ew)*.85 - sq(e.y/.1), 0.));
+  float lt = .042*sqrt(max(ee, 0.) + .15);
+  float s1 = clamp((e.y - up)/lt, 0., 1.), s2 = clamp((lo - e.y)/(lt*.7), 0., 1.);
+  ft += P(LIDR)*(pow(4.*s1*(1. - s1), .5) + .55*pow(4.*s2*(1. - s2), .5))*win;
+  ft -= P(CREASE)*G((e.y - up - P(CREASEH))/.016)*win;
+  ft -= P(BAG)*G((e.y - lo + .065 - .9*e.x*e.x)/.016)*smoothstep(ew*1.3, ew*.5, abs(e.x));
+  vec2 ic = vec2(f.x - sg*ex - P(GAZE), e.y - .006);
+  float ir = length(ic);
+  ft -= P(IRIS)*(G((ir - .05)/.0065) + 1.3*smoothstep(.024, .013, ir))*inside;
+
+  // --- eyebrows
+  float yb = P(BRY) + P(BRARCH)*(1. - sq((ax - ex - .02)/.2)) - P(BRSLANT)*(ax - ex);
+  float bw = smoothstep(.06, .15, ax)*smoothstep(ex + .27, ex + .14, ax);
+  float bhair = .9 + .1*sin(ax*120. + f.y*100.);
+  ft += P(BRH)*G((f.y - yb)/P(BRT))*bw*bhair;
+
+  // --- nose
+  float ntop = P(NTOP), ntip = P(NTIP);
+  float ny = clamp((ntop - f.y)/(ntop - ntip), 0., 1.);
+  float nw = mix(P(NBW), P(NTW), ny*ny);
+  float nh = P(NH)*(.16 + .84*pow(ny, 1.45)) + P(NHUMP)*G((ny - .36)/.17);
+  ft += nh*G(f.x/nw)*smoothstep(ntip - .075, ntip - .02, f.y)*smoothstep(ntop + .13, ntop - .06, f.y);
+  ft += P(NTIPH)*G2((f - vec2(0., ntip))/vec2(P(NTW)*1.1, .08));
+  ft += P(ALAH)*G2(vec2(ax - P(ALAX), f.y - ntip + .008)/vec2(.055, .06));
+  ft -= P(NOSTR)*G2(vec2(ax - P(ALAX)*.58, f.y - ntip + .066)/vec2(.034, .019));
+
+  // --- mouth
+  float my = P(MY), mw = P(MW);
+  float mx = f.x/mw;
+  float ym = my + P(SMILE)*mx*mx - P(BOW)*.5*G(f.x/.05);
+  float d = f.y - ym;
+  float env = pow(max(1. - mx*mx, 0.), .6);
+  float tu = P(ULT)*env*(1. - .2*G(f.x/.04)) + 1e-4;
+  float tl = P(LLT)*env + 1e-4;
+  float su = clamp(d/tu, 0., 1.), sl = clamp(-d/tl, 0., 1.);
+  float lips = .85*pow(4.*su*(1. - su), .55) + pow(4.*sl*(1. - sl), .55)*(1. - .12*G(f.x/.03));
+  ft += P(MUZ)*G2((f - vec2(0., my + .03))/vec2(.3, .2));
+  ft += P(LIPH)*lips*smoothstep(0., .25, env);
+  ft -= P(MLINE)*G(d/.013)*smoothstep(1.1, .9, abs(mx));
+  ft -= P(MCORN)*G2(vec2(ax - mw, f.y - my - P(SMILE))/vec2(.042, .036));
+  ft -= .022*G(f.x/.028)*G((f.y - (my + P(ULT) + .065))/.05);
+  ft -= P(SULC)*G2((f - vec2(0., my - P(LLT) - .055))/vec2(.14, .04));
+  ft += P(CHINH)*G2((f - vec2(0., P(CHINY)))/vec2(P(CHINW), .13));
+
+  // --- cheeks, folds, the marks of age
+  ft += P(CHK)*G2(vec2(ax - .40, f.y - P(CHKY))/vec2(.17, .13));
+  ft -= P(HOL)*G2(vec2(ax - .37, f.y + .42)/vec2(.12, .2));
+  ft -= P(NASO)*G(seg(vec2(ax, f.y), vec2(P(ALAX) + .035, ntip + .03), vec2(mw + .07, my - .05))/.022);
+  ft -= P(WRINK)*pow(.5 + .5*sin((f.y + .1*f.x*f.x)*66. + sin(f.x*5.)*1.2), 5.)*G(f.x/.36)*G((f.y - .47)/.1);
+
+  float h = head + ft*fm;
+  float pol = smoothstep(0., .03, qh);
+
+  // --- ears
+  vec2 er = vec2(abs(p.x) - P(EARX), p.y - .01)/vec2(.07, .17);
+  float ear = P(EARH)*sqrt(max(1. - dot(er, er), 0.))*(1. - .3*G2((er - vec2(.1, .1))/vec2(.4, .5)));
+
+  // --- shared ornament fields (each sitter owns one; the amplitudes trade places)
+  float worms = sin(p.x*21. + 2.5*sin(p.y*17. + 1.))*sin(p.y*21. + 2.5*sin(p.x*17.));
+  vec2 cg = p*vec2(9.5, 10.5) + vec2(.35*sin(p.y*7.), .3*sin(p.x*6.));
+  cg.x += .5*mod(floor(cg.y), 2.);
+  vec2 cc = fract(cg) - .5; float cr = length(cc);
+  float curls = .95*smoothstep(.52, .08, cr) + .3*sin(atan(cc.y, cc.x) + cr*17.)*smoothstep(.5, .22, cr)*smoothstep(.0, .1, cr) - .5;
+  float sy = p.y > -.2 ? p.y : -.2 - .4*(1. - exp((p.y + .2)/.4));
+  float phi = sy + 1.25*p.x*p.x;
+  float sA = sin(phi*50. + 2.6*sin(p.x*7. + p.y*3.) + 2.*vnoise(p*4.));
+  float strands = abs(sA) - .55 + .5*sin(phi*12.5 + sin(abs(p.x)*9.)*1.3);
+
+  // --- moustache
+  float must = G((f.y - (my + .088 - 1.1*ax*ax))/.046)*smoothstep(mw + .15, mw - .03, ax)*(1. - .55*G(f.x/.02));
+  float mtex = .78 + .22*abs(sin(ax*60. - f.y*38.));
+  h += P(MUST)*must*mtex*fm;
+
+  // --- beard
+  float bmask = smoothstep(-.02, .02, P(BDTOP) + P(BDK)*p.x*p.x - p.y);
+  bmask *= smoothstep(.85, 1.12, length((f - vec2(0., my - .025))/vec2(mw*.92, .05)));
+  float qb = 1. - dot(vec2(1.), sq2((p - vec2(0., P(BDY)))/vec2(P(BDRX), P(BDRY))));
+  float btex = abs(sin(p.x*33. + 2.3*sin(p.y*12. + p.x*5.))) - .5 + .55*worms;
+  float beardTop = smax(P(BDH)*pow(max(qb, 0.), .5), h + P(BDTHICK), .06) + P(BDTEX)*btex;
+  float ba = bmask*smoothstep(0., .035, qb)*P(BEARD);
+  h = mix(h, beardTop, ba);
+  pol = mix(pol, .5, ba);
+
+  // --- hair
+  float qhair = 1. - dot(vec2(1.), sq2((p - vec2(0., P(HCY)))/vec2(P(HRX), P(HRY))));
+  float hpres = smoothstep(0., .03, qhair);
+  float hm = smoothstep(-.014, .014, p.y - P(HLY) + P(HLK)*p.x*p.x + P(HLK6)*pow(p.x, 6.) + .012*sA*P(STRA)*28.)*hpres;
+  float band = P(BAND)*G((p.y + .42*p.x*p.x - .84)/.03);
+  float hairTop = smax(P(HAIRH)*pow(max(qhair, 0.), .6), head + P(HTHICK), .06)
+                + (P(STRA)*strands + P(CURL)*curls)*smoothstep(0., .1, qhair) + band;
+  h = mix(h, hairTop, hm);
+  pol = mix(pol, .5, hm);
+
+  h = max(h, ear);
+
+  // --- neck, shoulders, cloth
+  float nkw = P(NKW)*(1. + .22*smoothstep(-1.0, -1.7, q.y));
+  float neck = P(NKH)*pow(max(1. - sq(q.x/nkw), 0.), .62)*smoothstep(-.5, -.72, q.y);
+  neck *= 1. - .1*G((abs(q.x) - P(NKW)*.42)/.05)*smoothstep(-1.5, -1., q.y)*0.;
+  float sd = P(SHY) - P(SHS)*pow(abs(q.x), 1.6) - q.y;
+  float sh = P(SHH)*(1. - exp(-max(sd, 0.)/.16))*smoothstep(0., .02, sd)*(1. - .2*q.x*q.x);
+  float body = smax(neck, sh, .16) - .0225*smoothstep(.0, -.3, max(neck, sh) - .001);
+  body = max(body, 0.);
+  body += P(CLAV)*G((q.y - (P(SHY) - .23 - .12*abs(q.x)))/.03)*smoothstep(.07, .16, abs(q.x))*smoothstep(.75, .5, abs(q.x))*step(.001, sh);
+  float gy = P(GNY) + P(GNK)*q.x*q.x + P(GND)*q.x;
+  float cm = smoothstep(-.012, .012, gy - q.y)*smoothstep(0., .03, sd);
+  float fa = sin((q.y - .85*q.x*q.x)*36. + 1.4*sin(q.x*8.));
+  float fb = sin((q.y + q.x*.85)*27. + 2.*sin(q.x*5. + q.y*3.));
+  body += cm*(P(CLOTH) + P(FOLDA)*fa + P(FOLDB)*(fb + .4*fb*fb));
+  float bpol = mix(1., .72, cm)*smoothstep(0., .02, body);
+
+  if (body > h) pol = bpol;
+  h = max(h, body);
+  return vec2(h, pol);
+}
+
+void main(){
+  vec2 w = (gl_FragCoord.xy - .5*uRes)/(.5*uRes.y)*uScale;
+
+  // --- the wall: old lime plaster, never quite flat
+  float H = .007*fbm(w*1.6 + 3.) + .0022*fbm3(w*7.);
+  float crk = w.x - (-1.34 + .1*sin(w.y*2.1) + .06*vnoise(vec2(w.y*6., 2.)));
+  H -= .0035*G(crk/.0035)*smoothstep(-.15, .5, w.y);
+
+  // --- the slab
+  vec2 sp = w;
+  float sd = slabSD(sp);
+  float slab = smoothstep(.0035, -.0035, sd);
+  H -= .007*G(sd/.012)*(1. - slab);                       // mortar bed round the stone
+
+  vec2 pdv = abs(sp) - vec2(.55, .79);
+  float pd = length(max(pdv, 0.)) + min(max(pdv.x, pdv.y), 0.);
+  float fr = smoothstep(-.032, -.003, pd);
+  fr = fr*fr*(1.4 - .4*fr);
+  float top = .058 - .004*fbm3(sp*5.) - .0032*G((pd - .024)/.0045) - .014*smoothstep(-.02, .0, sd);
+  float c2 = abs(sp.x - (.37 + .3*(sp.y - .86) + .02*sin(sp.y*8.) + .02*vnoise(vec2(sp.y*14., 5.))));
+  float crack = .005*G(c2/.003)*smoothstep(.3, .52, sp.y);
+
+  // --- the portrait, and the wave of change that crosses it
+  vec2 q = (sp - vec2(0., .10))/.50;
+  float n = .62*fbm3(q*1.25 + 11.) + .38*clamp(.5 - .28*q.y + .12*q.x, 0., 1.);
+  float tl = clamp(uT*1.5 - .5*n, 0., 1.);
+  float t = mix(tl, tl*tl*(3. - 2.*tl), .65);
+  vec2 rp = sitter(q, t);
+  float act = 4.*t*(1. - t);
+  float flow = fbm3(q*3.2 + vec2(0., uT*2.2)) - .5;
+  float rel = rp.x*(1. - .05*act) + act*.035*flow*smoothstep(0., .08, rp.x + .03);
+  rel = max(rel, 0.);
+
+  float floorH = .021 + .0018*fbm3(sp*4.);
+  float er = smoothstep(.5, .78, fbm3(sp*7. + 31.));
+  rel = max(rel - .03*er*smoothstep(0., .1, rel), 0.);
+  float Hs = mix(floorH + rel*.10, top, fr) - crack;
+  H = mix(H, Hs, slab);
+  float polish = rp.y*(1. - fr)*slab;
+  H += detailH(w, slab, polish);
+  o = vec4(H, polish, slab, act*slab*(1. - fr));
+}`.replace(/sq2\(/g, 'SQ2(').replace('float sq(float x){ return x*x; }', 'float sq(float x){ return x*x; }\n#define SQ2(v) ((v)*(v))');
+
+/* ------------------------------------------------------------------ *
+ *  Pass 2 — the afternoon. Grazing sun, soft shadows marched through  *
+ *  the height field, sky fill, grime in the hollows.                  *
+ * ------------------------------------------------------------------ */
+const LIGHT_FRAG = /* glsl */`
+precision highp float;
+out vec4 o;
+uniform sampler2D tH, tA, tS; uniform vec2 uRes; uniform float uScale; uniform float uTime; uniform vec3 uL; uniform float uFade;
+${NOISE}
+vec3 aces(vec3 x){ return clamp((x*(2.51*x + .03))/(x*(2.43*x + .59) + .14), 0., 1.); }
+
+void main(){
+  vec2 px = 1./uRes, uv = gl_FragCoord.xy*px;
+  float wpp = uScale/(.5*uRes.y);
+  vec2 w = (gl_FragCoord.xy - .5*uRes)*wpp;
+  vec4 c = texture(tH, uv);
+  float H0 = c.r, pol = c.g, mat = c.b, act = c.a;
+
+  // --- surface normal: carving + grain
+  float hl = texture(tH, uv - vec2(px.x, 0.)).r, hr = texture(tH, uv + vec2(px.x, 0.)).r;
+  float hd = texture(tH, uv - vec2(0., px.y)).r, hu = texture(tH, uv + vec2(0., px.y)).r;
+  vec2 g = vec2(hr - hl, hu - hd)/(2.*wpp);
+  vec3 N = normalize(vec3(-g, 1.));
+  vec3 L = normalize(uL);
+  vec2 ld = normalize(L.xy);
+
+  // --- soft shadow and cavities, gathered at half resolution
+  vec4 sc = texture(tS, uv);
+  float shadow = sc.r, ao = sc.g, cav = sc.b*.05;
+  float h2 = textureLod(tH, uv, 2.5).r;
+  float edge = clamp((H0 - h2)*90., 0., 1.);
+
+  // --- colour of the stone
+  vec4 base = texture(tA, uv);
+  float grime = clamp(cav*70. + (1. - ao)*.8, 0., 1.)*base.a;
+  vec3 stone = mix(base.rgb, vec3(.36, .30, .235), clamp(grime, 0., .8)*.72);
+  stone *= 1. + .16*edge;                                                                    // handled, worn high points
+  stone = mix(stone, vec3(.90, .87, .81), .10*act);                                          // fresh stone where it stirs
+  vec3 wall = base.rgb*(1. - .2*clamp(cav*40., 0., 1.));
+  vec3 alb = mix(wall, stone, mat);
+
+  // --- light
+  float leaves = fbm(w*1.9 + vec2(uTime*.011, .02*sin(uTime*.21)) + .35*vec2(vnoise(w*1.1 + uTime*.016)));
+  float region = smoothstep(.62, 1.35, length((w - vec2(-.1, -.1))*vec2(.6, .95)));
+  float dapple = mix(1., smoothstep(.40, .56, leaves), .8*region);
+  float pool = 1.08 - .30*smoothstep(-1.6, 1.9, dot(w, -ld)*-1.);
+  vec3 sunC = vec3(1.0, .85, .66)*1.3;
+  float ndl = max(dot(N, L), 0.);
+  vec3 sun = sunC*ndl*shadow*dapple*pool;
+  vec3 sky = mix(vec3(.085, .075, .062), vec3(.095, .13, .19), N.y*.5 + .5)*ao;
+  vec3 bounce = vec3(.10, .075, .05)*max(dot(N, normalize(vec3(-ld*.7 + vec2(0., -.3), .5))), 0.)*ao*(.4 + .6*shadow);
+  vec3 col = alb*(sun + sky + bounce);
+  vec3 Hh = normalize(L + vec3(0., 0., 1.));
+  col += sunC*pow(max(dot(N, Hh), 0.), 22.)*.075*(.25 + .75*pol)*mat*shadow*dapple;
+  col += alb*sunC*.035*(1. - shadow)*mat;                                                    // a little light inside the stone
+
+  // --- air
+  float haze = smoothstep(2.2, -1.2, dot(w, -ld)*-1.);
+  col += vec3(.030, .023, .015)*haze*haze;
+  vec2 vq = (uv - .5)*vec2(1.08, 1.2);
+  col *= 1. - .78*smoothstep(.28, 1.05, dot(vq, vq)*2.);
+  col *= uFade;
+  col = aces(col*1.12);
+  col = pow(col, vec3(1./2.2));
+  col += (hash(gl_FragCoord.xy + fract(uTime)*91.7) - .5)/200.;
+  o = vec4(col, 1.);
+}`;
+
+/* ------------------------------------------------------------------ */
+
+
+/* Pass 2a — soft shadows: walk toward the sun, widening the cone with distance. */
+const SHADOW_FRAG = /* glsl */`
+precision highp float;
+out vec4 o;
+uniform sampler2D tH; uniform vec2 uRes, uHRes; uniform float uScale; uniform vec3 uL;
+void main(){
+  vec2 px = 1./uRes, uv = gl_FragCoord.xy/uHRes;
+  float wpp = uScale/(.5*uRes.y);
+  float H0 = textureLod(tH, uv, .6).r;
+  vec3 L = normalize(uL);
+  vec2 ld = normalize(L.xy); float tanEl = L.z/length(L.xy);
+  const float ALPHA = .085;
+  float minv = 1e3, s = wpp*2.2;
+  for (int i = 0; i < 18; i++){
+    float lod = clamp(log2(s*ALPHA/wpp) + .6, .6, 5.);
+    float hs = textureLod(tH, uv + ld*(s/wpp)*px, lod).r;
+    minv = min(minv, (tanEl - (hs - H0)/s)/ALPHA);
+    s *= 1.3;
+  }
+  float shadow = smoothstep(-1., 1., minv);
+  float h2 = textureLod(tH, uv, 2.5).r, h4 = textureLod(tH, uv, 4.2).r, h6 = textureLod(tH, uv, 6.).r;
+  float cav = max(h4 - H0, 0.);
+  float ao = clamp(1. - 16.*cav - 7.*max(h6 - H0, 0.) - 22.*max(h2 - H0, 0.), .28, 1.);
+  o = vec4(shadow, ao, clamp(cav/.05, 0., 1.), 1.);
+}`;
+
+/* Pass 0 — the colour of the stone itself, painted once. */
+const ALBEDO_FRAG = /* glsl */`
+precision highp float;
+out vec4 o;
+uniform vec2 uRes; uniform float uScale;
+${NOISE}
+${SHARED}
+void main(){
+  vec2 w = (gl_FragCoord.xy - .5*uRes)/(.5*uRes.y)*uScale;
+  float mat = smoothstep(.0035, -.0035, slabSD(w));
+  float m1 = fbm(w*3.1 + 20.), m2 = fbm(w*11. + 5.);
+  float vein = pow(1. - abs(2.*fbm(w*2.3 + 2.*vec2(fbm3(w*1.4), fbm3(w*1.4 + 7.))) - 1.), 9.);
+  vec3 stone = vec3(.80, .77, .715)*(.86 + .22*m1)*(.94 + .12*m2);
+  stone = mix(stone, vec3(.60, .575, .55), .28*vein);
+  stone = mix(stone, vec3(.86, .80, .70), .25*smoothstep(.45, .7, fbm3(w*5. + 40.)));      // warm ochre blooms
+  float streak = fbm3(vec2(w.x*26., w.y*1.6) + 3.)*smoothstep(.3, .9, fbm3(w*2. + 9.));
+  stone = mix(stone, vec3(.36, .30, .235), .15*streak);
+  stone *= 1. - .16*smoothstep(.2, -.9, w.y)*fbm3(w*3. + 60.) - .12*smoothstep(.52, .7, fbm3(w*6.5 + 80.));
+  vec3 wall = vec3(.47, .415, .35)*(.72 + .5*fbm(w*1.9 + 4.))*(.9 + .2*m2);
+  wall = mix(wall, vec3(.47, .44, .38), .55*smoothstep(.5, .72, fbm(w*.9 + 30.)));
+  float below = smoothstep(-.84, -.95, w.y)*smoothstep(.70, .5, abs(w.x));
+  float drip = smoothstep(.38, .75, fbm3(vec2(w.x*17., w.y*.9) + 1.));
+  wall *= 1. - .30*below*drip;
+  o = vec4(mix(wall, stone, mat), .55 + .45*m2);
+}`;
+
+const canvas = document.getElementById('c');
+let renderer;
+try {
+  renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
+  if (!renderer.capabilities.isWebGL2) throw new Error('webgl2');
+} catch (err) {
+  document.getElementById('fallback').style.display = 'flex';
+  throw err;
+}
+const gl = renderer.getContext();
+const floatOK = !!gl.getExtension('EXT_color_buffer_float') && !!gl.getExtension('OES_texture_float_linear');
+renderer.autoClear = false;
+
+const cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+const tri = new THREE.BufferGeometry();
+tri.setAttribute('position', new THREE.BufferAttribute(new Float32Array([-1, -1, 0, 3, -1, 0, -1, 3, 0]), 3));
+
+const heightMat = new THREE.RawShaderMaterial({
+  glslVersion: THREE.GLSL3, vertexShader: VERT, fragmentShader: HEIGHT_FRAG, depthTest: false, depthWrite: false,
+  uniforms: {
+    uRes: { value: new THREE.Vector2() }, uScale: { value: 1.0 }, uT: { value: 0 },
+    PA: { value: SITTERS.map(s => s[1]) }, PB: { value: SITTERS.map(s => s[2]) },
+  },
+});
+const lightMat = new THREE.RawShaderMaterial({
+  glslVersion: THREE.GLSL3, vertexShader: VERT, fragmentShader: LIGHT_FRAG, depthTest: false, depthWrite: false,
+  uniforms: {
+    tH: { value: null }, tA: { value: null }, tS: { value: null }, uRes: { value: new THREE.Vector2() }, uScale: { value: 1.0 },
+    uTime: { value: 0 }, uL: { value: new THREE.Vector3(-1, .5, .3) }, uFade: { value: 0 },
+  },
+});
+const albedoMat = new THREE.RawShaderMaterial({
+  glslVersion: THREE.GLSL3, vertexShader: VERT, fragmentShader: ALBEDO_FRAG, depthTest: false, depthWrite: false,
+  uniforms: { uRes: { value: new THREE.Vector2() }, uScale: { value: 1.0 } },
+});
+const shadowMat = new THREE.RawShaderMaterial({
+  glslVersion: THREE.GLSL3, vertexShader: VERT, fragmentShader: SHADOW_FRAG, depthTest: false, depthWrite: false,
+  uniforms: { tH: { value: null }, uRes: { value: new THREE.Vector2() }, uHRes: { value: new THREE.Vector2() },
+    uScale: { value: 1.0 }, uL: lightMat.uniforms.uL },
+});
+const mesh = new THREE.Mesh(tri, heightMat); mesh.frustumCulled = false;
+const scene = new THREE.Scene(); scene.add(mesh);
+
+let rt = null, rtA = null, rtS = null, dirty = true;
+function resize() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+  const W = window.innerWidth, Hh = window.innerHeight;
+  renderer.setPixelRatio(dpr); renderer.setSize(W, Hh, false);
+  const bw = Math.max(2, Math.floor(W*dpr)), bh = Math.max(2, Math.floor(Hh*dpr));
+  if (rt) rt.dispose();
+  if (rtA) rtA.dispose();
+  if (rtS) rtS.dispose();
+  const hw = Math.ceil(bw/2), hh = Math.ceil(bh/2);
+  rtS = new THREE.WebGLRenderTarget(hw, hh, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false });
+  shadowMat.uniforms.uHRes.value.set(hw, hh);
+  rtA = new THREE.WebGLRenderTarget(bw, bh, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false });
+  rt = new THREE.WebGLRenderTarget(bw, bh, {
+    type: floatOK ? THREE.FloatType : THREE.HalfFloatType, format: THREE.RGBAFormat,
+    minFilter: THREE.LinearMipmapLinearFilter, magFilter: THREE.LinearFilter,
+    generateMipmaps: true, depthBuffer: false, stencilBuffer: false,
+  });
+  rt.texture.wrapS = rt.texture.wrapT = THREE.ClampToEdgeWrapping;
+  const aspect = bw/bh;
+  const scale = Math.max(1.0, .70/aspect);          // keep the whole slab in view on narrow screens
+  for (const m of [heightMat, lightMat, albedoMat, shadowMat]) { m.uniforms.uRes.value.set(bw, bh); m.uniforms.uScale.value = scale; }
+  lightMat.uniforms.tH.value = rt.texture;
+  lightMat.uniforms.tA.value = rtA.texture;
+  lightMat.uniforms.tS.value = rtS.texture;
+  shadowMat.uniforms.tH.value = rt.texture;
+  mesh.material = albedoMat;
+  renderer.setRenderTarget(rtA); renderer.render(scene, cam); renderer.setRenderTarget(null);
+  dirty = true;
+}
+window.addEventListener('resize', resize); resize();
+
+// --- scroll → the stone's state of mind
+const qs = new URLSearchParams(location.search);
+const forceT = qs.has('t') ? parseFloat(qs.get('t')) : null;
+const forceTime = qs.has('time') ? parseFloat(qs.get('time')) : null;
+const START = 110, END = 2080;
+const target = () => forceT !== null ? forceT : Math.min(1, Math.max(0, (window.scrollY - START)/(END - START)));
+let T = target(), lastT = -1;
+
+const $ = id => document.getElementById(id);
+const hint = $('hint'), label = $('label'), rail = $('rail'), dot = rail.querySelector('.dot');
+const ra = rail.querySelector('.a'), rb = rail.querySelector('.b');
+setTimeout(() => { label.style.opacity = 1; rail.style.opacity = 1; if (window.scrollY < 40) hint.style.opacity = 1; }, 900);
+window.addEventListener('scroll', () => { hint.style.opacity = window.scrollY > 40 ? 0 : 1; }, { passive: true });
+
+const clock = new THREE.Clock();
+let time = 0; const t0 = performance.now();
+function frame() {
+  const dt = Math.min(clock.getDelta(), .1);
+  time += dt;
+  const tt = forceTime !== null ? forceTime : time;
+
+  // the stone follows the hand with a little weight, then settles
+  const tg = target();
+  T += (tg - T)*(1 - Math.exp(-dt*4.2));
+  if (Math.abs(tg - T) < 2e-4) T = tg;
+
+  if (dirty || Math.abs(T - lastT) > 1e-5) {
+    heightMat.uniforms.uT.value = T;
+    mesh.material = heightMat;
+    renderer.setRenderTarget(rt); renderer.render(scene, cam);
+    lastT = T; dirty = false;
+  }
+
+  // the sun, moving along the wall
+  const az = (149 + 21*Math.sin(tt*.085 + .6) + 3*Math.sin(tt*.031))*Math.PI/180;
+  const el = (14.5 + 4.5*Math.sin(tt*.061 + 2.1))*Math.PI/180;
+  lightMat.uniforms.uL.value.set(Math.cos(az)*Math.cos(el), Math.sin(az)*Math.cos(el), Math.sin(el));
+  lightMat.uniforms.uTime.value = tt;
+  lightMat.uniforms.uFade.value = Math.min(1, (performance.now() - t0)/2400)**1.5;
+  mesh.material = shadowMat;
+  renderer.setRenderTarget(rtS); renderer.render(scene, cam);
+  mesh.material = lightMat;
+  renderer.setRenderTarget(null); renderer.render(scene, cam);
+
+  window.__T = T;
+  dot.style.transform = `translateY(${(T*142).toFixed(1)}px)`;
+  ra.style.color = `rgba(236,226,208,${(.85 - .5*T).toFixed(2)})`;
+  rb.style.color = `rgba(236,226,208,${(.35 + .5*T).toFixed(2)})`;
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
