@@ -47,7 +47,7 @@
     background:var(--ink);box-shadow:0 0 10px rgba(255,230,190,0.35);
   }
   .hint{
-    position:absolute;left:50%;bottom:calc(clamp(18px,4.2vh,40px) + 30px);transform:translateX(-50%);
+    position:absolute;left:50%;bottom:calc(clamp(18px,4.2vh,40px) + 24px);transform:translateX(-50%);
     font-size:11px;letter-spacing:0.42em;text-transform:uppercase;color:var(--ink-dim);
     display:flex;flex-direction:column;align-items:center;gap:8px;
     opacity:0;transition:opacity 1.6s ease;
@@ -98,14 +98,15 @@ float fbm3(vec2 p){float s=0.,a=.5;for(int i=0;i<3;i++){s+=a*vnoise(p);p=FM*p;a*
 
 /* ashlar wall: blocks in running bond with recessed joints (height >= 0) */
 float wallH(vec2 p){
-  vec2 bs=vec2(0.92,0.46);
+  vec2 bs=vec2(1.32,0.64);
   vec2 q=p/bs+vec2(0.31,0.27);
   float row=floor(q.y);
-  q.x+=mod(row,2.)*0.5;
+  q.x+=mod(row,2.)*0.5+0.13*(hash12(vec2(row,3.))-0.5);
   vec2 id=floor(q);vec2 f=fract(q);
   vec2 e2=min(f,1.-f)*bs;float e=min(e2.x,e2.y);
-  float j=smoothstep(0.002,0.016,e+(vnoise(p*38.)-0.5)*0.007);
-  float face=0.006+0.004*vnoise(p*5.+id*13.1)+0.0025*fbm3(p*22.+id*3.);
+  float j=smoothstep(0.0,0.03,e+(fbm3(p*14.)-0.5)*0.016);
+  j=j*j*(3.-2.*j);
+  float face=0.0035+0.003*vnoise(p*4.+id*13.1)+0.0025*fbm3(p*18.+id*3.);
   return j*face;
 }
 `;
@@ -193,7 +194,8 @@ vec4 figure(vec2 q0){
   float lm=smoothstep(f*0.55,f*0.55+0.45,m);
 
   float yaw=P(-0.075,0.085);
-  float open=smoothstep(0.25,0.85,G);
+  float open=mix(0.62,1.0,smoothstep(0.25,0.85,G));
+  float iris=smoothstep(0.35,0.9,G);
 
   /* ---- skull and face masses ---- */
   float cr=capE(q,vec2(0.,0.30),vec2(P(0.77,0.84),0.97),0.30,0.62);
@@ -222,10 +224,10 @@ vec4 figure(vec2 q0){
     float tb=1.-(e.x/0.145)*(e.x/0.145)-(e.y/0.098)*(e.y/0.098);
     float ball=0.066*pow(max(tb,0.),0.85);
     float xn=clamp(e.x/0.13,-1.2,1.2);
-    float upO=0.022-0.040*xn*xn+0.010*xn;
+    float upO=0.016-0.036*xn*xn+0.010*xn;
     float upC=-0.030+0.020*xn*xn+0.004*xn;
     float up=mix(upC,upO,open);
-    float loO=-0.042+0.032*xn*xn;
+    float loO=-0.048+0.034*xn*xn;
     float lo=mix(up-0.002,loO,open);
     float tl=1.-(e.x/0.165)*(e.x/0.165)-((e.y-0.012)/0.12)*((e.y-0.012)/0.12);
     float inEye=sat(tb*5.);
@@ -237,13 +239,13 @@ vec4 figure(vec2 q0){
     float creaseY=mix(0.058,0.064,open)-0.05*xn*xn;
     eh-=0.008*lidZone*vg(e.y-creaseY,0.013)*smoothstep(-0.01,0.03,e.y);
     // lash line of the closed lids, a fine incision
-    eh-=(1.-open)*0.006*vg(e.y-up,0.006)*inEye;
+
     // iris ring and drilled pupil (open eyes only)
-    float ri=length(e-vec2(0.004*s,-0.004));
-    eh-=vis*open*0.004*vg(ri-0.050,0.006);
-    float pu=smoothstep(0.019,0.010,length((e-vec2(-0.004,0.010))*vec2(1.,0.8)));
-    eh-=vis*open*0.024*pu;
-    deep=max(deep,vis*open*pu);
+    float ri=length(e-vec2(0.0,-0.006));
+    eh-=vis*iris*0.006*vg(ri-0.046,0.007);
+    float pu=smoothstep(0.020,0.011,length((e-vec2(0.0,0.004))*vec2(1.,0.85)));
+    eh-=vis*iris*0.024*pu;
+    deep=max(deep,vis*iris*pu);
     // lower-lid bags of the older face
     eh+=lm*0.010*bump(q,E+vec2(0.0,-0.115),vec2(0.13,0.035));
     eh-=lm*0.006*vg(e.y-(-0.150+0.05*xn*xn),0.012)*sat(1.-xn*xn*0.8);
@@ -256,13 +258,13 @@ vec4 figure(vec2 q0){
     cf+=vg(sdSeg(q,cfo,cfo+vec2(s*0.10,-0.005)),0.010);
     cf+=vg(sdSeg(q,cfo+vec2(0.,-0.03),cfo+vec2(s*0.085,-0.08)),0.010);
     z-=lm*0.006*cf;
-    z-=lm*0.010*vg(sdSeg(q,vec2(s*0.045+yaw*0.3,0.10),vec2(s*0.06+yaw*0.3,0.23)),0.012);
+    z-=lm*0.007*vg(sdSeg(q,vec2(s*0.045+yaw*0.3,0.12),vec2(s*0.055+yaw*0.3,0.20)),0.012);
 
     /* ---- ears ---- */
     vec2 Ec=vec2(s*P(0.785,0.835)-yaw*0.15,-0.11);
     float ear=capE(q,Ec,vec2(0.08,0.21),0.10,0.6);
     z=smax(z,ear,0.03);
-    z-=0.035*bump(q,Ec+vec2(-0.012*s,-0.02),vec2(0.045,0.13));
+    z-=0.018*bump(q,Ec+vec2(-0.02*s,-0.02),vec2(0.04,0.12));
 
     /* ---- nasolabial fold ---- */
     float nl=sdSeg(q,vec2(s*0.135+yaw*0.5,-0.40),vec2(s*0.255+yaw*0.4,-0.71));
@@ -318,7 +320,7 @@ vec4 figure(vec2 q0){
     deep=max(deep,0.5*vg(mq.y-ym,0.006)*lineFade);
     for(int k=0;k<2;k++){float s=k==0?-1.:1.;
       z-=0.018*bump(mq,vec2(s*mw,ym+curve*mw*mw*0.0),vec2(0.028,0.022));
-      z+=0.007*bump(mq,vec2(s*0.026,0.085),vec2(0.012,0.05));
+      z+=0.003*bump(mq,vec2(s*0.028,0.085),vec2(0.02,0.05));
     }
     z-=0.024*bump(mq,vec2(0.,-0.135),vec2(0.13,0.035));
     z+=P(0.045,0.06)*bump(q,vec2(yaw*0.35,-0.93),vec2(P(0.17,0.21),0.12));
@@ -326,126 +328,126 @@ vec4 figure(vec2 q0){
 
   /* ---- neck, shoulders ---- */
   float nw=P(0.355,0.43);
-  float neck=0.185*pow(sat(1.-pow((X-yaw*0.1)/nw,2.)),0.5)*smoothstep(-0.32,-0.66,Y);
-  float sh=capE(q,vec2(0.,-2.22),vec2(1.66,1.02),0.24,0.5);
+  nw*=1.0-0.12*smoothstep(-1.3,-0.8,Y);
+  float neck=0.185*pow(sat(1.-pow((X-yaw*0.1)/nw,2.)),0.55)*smoothstep(-0.32,-0.66,Y);
+  float sh=capE(q,vec2(0.,-2.14),vec2(1.66,1.0),0.24,0.5);
   float body=smax(neck,sh,0.16);
-  // the first face: tendons of the neck, collarbones
-  for(int k=0;k<2;k++){float s=k==0?-1.:1.;
-    body+=(1.-lm)*0.008*vg(sdSeg(q,vec2(s*0.26,-0.86),vec2(s*0.08,-1.36)),0.07);
-    body+=(1.-lm)*0.010*vg(sdSeg(q,vec2(s*0.12,-1.37),vec2(s*0.62,-1.27)),0.05);
-    body-=(1.-lm)*0.012*bump(q,vec2(0.,-1.40),vec2(0.07,0.06));
-  }
   z=smax(z,body,0.025);
+  float onBody=smoothstep(0.0,0.05,sh);
 
-  /* ---- drapery ---- */
-  float garAmt=0.;
-  float onBody=smoothstep(0.0,0.05,sh)+smoothstep(0.0,0.05,neck)*0.0;
+  /* ================= layer A: the first sitter ================= */
+  float zA=z,hairA=0.,garA=0.,deepA=0.;
   {
+    // tendons of the neck, collarbones, the hollow at the throat
+    for(int k=0;k<2;k++){float s=k==0?-1.:1.;
+      zA+=0.010*vg(sdSeg(q,vec2(s*0.12,-1.30),vec2(s*0.62,-1.20)),0.05)*onBody;
+    }
+    zA-=0.012*bump(q,vec2(0.,-1.33),vec2(0.07,0.06));
     // chiton: swags hanging from the neckline, falling into vertical folds
-    float ynW=-1.38+0.22*pow(abs(X)/0.85,2.);
+    float ynW=-1.31+0.20*pow(abs(X)/0.85,2.);
     float gW=smoothstep(ynW+0.006,ynW-0.006,Y)*onBody;
     float dn=ynW-Y;
     float swag=sqrt(abs(sin(dn*24.+0.5*sin(X*4.))))*exp(-dn*2.4);
     float vert=sqrt(abs(sin(X*13.+1.2*sin(Y*2.5+X*3.))))*sat(dn*1.6);
     float foldW=0.03*mix(swag,vert,sat(dn*1.6))*sat(dn*30.);
-    float garW=body+0.022+foldW;
-    float wW=(1.-lm);
-    z=mix(z,max(z,garW),gW*wW);
-    garAmt=max(garAmt,gW*wW);
+    zA=mix(zA,max(zA,body+0.022+foldW),gW);
+    garA=gW;
     // a string of beads
     float bx=floor(X/0.052+0.5)*0.052;
-    float by=-1.36+0.22*pow(abs(bx)/0.85,2.)-0.01;
+    float by=-1.29+0.20*pow(abs(bx)/0.85,2.)-0.01;
     vec2 bd=vec2(X-bx,Y-by);
-    float bon=step(abs(bx),0.40);
-    float bead=capE(bd,vec2(0.),vec2(0.021),0.024,0.5)*bon;
-    z=mix(z,max(z,body+bead+0.008),wW*sat(bead*80.));
-
-    // the second face: a heavy cloak thrown over the shoulder, pinned with a brooch
-    float ynM=-1.22-0.10*X-0.06*X*X;
-    float gM=smoothstep(ynM+0.006,ynM-0.006,Y)*onBody;
-    float u=dot(q,normalize(vec2(0.75,0.62)))*7.5+0.9*vnoise(q*2.2);
-    float foldM=0.05*sqrt(abs(sin(u)));
-    float garM=body+0.045+foldM*sat((ynM-Y)*3.+0.2);
-    z=mix(z,max(z,garM),gM*lm);
-    garAmt=max(garAmt,gM*lm);
-    vec2 bc=vec2(-0.88,-1.62);
-    float br=length(q-bc);
-    float brooch=capE(q,bc,vec2(0.12),0.06,0.4)+0.012*vg(br-0.08,0.012)-0.018*vg(br-0.045,0.01)+0.02*capE(q,bc,vec2(0.028),1.,0.5);
-    z=mix(z,max(z,garM+brooch),lm*sat(brooch*60.)*onBody);
-  }
-
-  float hairAmt=0.;
-  /* ---- first face: hair parted and waved, bound with a fillet ---- */
-  {
+    float bead=capE(bd,vec2(0.),vec2(0.021),0.024,0.5)*step(abs(bx),0.40);
+    zA=mix(zA,max(zA,body+bead+0.008),sat(bead*80.));
+    // hair parted and waved, bound with a fillet
     vec2 hc=vec2(0.,-0.17);vec2 hr=vec2(0.68,0.955);
     float rho=length((q-hc)/hr);
     float ang=atan(abs(X),Y-hc.y);
     float edge=0.03*sin(ang*7.+0.6);
-    float hm=capE(q,vec2(0.,0.16),vec2(1.0+edge,1.16+edge),0.33,0.5);
-    // waves: crests running back from the face, locks running around it
+    float hm=capE(q,vec2(0.,0.16),vec2(1.0+edge,1.16+edge),0.30,0.55);
     float wave=sin(ang*7.+rho*5.5);
     float rr=rho+0.05*wave;
     float cut;
     float tf=tufts(vec2(ang*1.05,rr*0.62),0.058,3.2,5.,cut);
     float part=vg(X,0.035)*smoothstep(0.62,0.85,Y);
     float zh=hm+0.055*tf+0.03*wave*sat((rho-1.)*6.)-0.05*part;
-    // fillet across the hair
     float fb=abs(rho-1.24);
     float fil=smoothstep(0.05,0.044,fb);
     zh=mix(zh,hm+0.06-0.007*vg(fb-0.028,0.009),fil);
-    float wW=(1.-lm);
-    float mask=wW*smoothstep(1.0,1.02,rho)*step(0.001,hm);
-    z=mix(z,max(z,zh),mask);
-    hairAmt=max(hairAmt,mask*(1.-fil*0.6));
-    deep=max(deep,mask*(1.-fil)*cut*0.35);
+    float mask=smoothstep(1.0,1.02,rho)*step(0.001,hm);
+    zA=mix(zA,max(zA,zh),mask);
+    hairA=mask*(1.-fil*0.6);
+    deepA=max(deep,mask*(1.-fil)*cut*0.35);
   }
-  /* ---- second face: cropped locks whorling from the crown ---- */
+
+  /* ================= layer B: the second sitter ================= */
+  float zB=z,hairB=0.,garB=0.,deepB=deep;
   {
-    float rhoM=length((q-vec2(yaw*0.1,-0.30))/vec2(0.72,1.03));
-    float hm=capE(q,vec2(0.,0.28),vec2(0.86,1.0),0.335,0.5);
-    vec2 cd=q-vec2(0.10,1.42);
-    float cang=atan(cd.x,-cd.y);
-    float cr2=length(cd);
-    float cut;
-    float tf=tufts(vec2(cr2,cang*(0.25+0.45*cr2)+0.05*sin(cr2*9.)),0.10,1.6,3.,cut);
-    float zh=hm+0.05*tf;
-    float mask=lm*smoothstep(1.0,1.025,rhoM)*smoothstep(-0.05,0.08,Y)*step(0.001,hm);
-    z=mix(z,max(z,zh),mask);
-    hairAmt=max(hairAmt,mask);
-    deep=max(deep,mask*cut*0.5);
+    // a heavy cloak thrown over the shoulder, pinned with a brooch
+    float ynM=-1.16-0.10*X-0.06*X*X;
+    float gM=smoothstep(ynM+0.006,ynM-0.006,Y)*onBody;
+    float u=dot(q,normalize(vec2(0.75,0.62)))*7.5+0.9*vnoise(q*2.2);
+    float foldM=0.05*sqrt(abs(sin(u)));
+    float garM=body+0.045+foldM*sat((ynM-Y)*3.+0.2);
+    zB=mix(zB,max(zB,garM),gM);
+    garB=gM;
+    vec2 bc=vec2(-0.88,-1.62);
+    float br=length(q-bc);
+    float brooch=capE(q,bc,vec2(0.12),0.06,0.4)+0.012*vg(br-0.08,0.012)-0.018*vg(br-0.045,0.01)+0.02*capE(q,bc,vec2(0.028),1.,0.5);
+    zB=mix(zB,max(zB,garM+brooch),sat(brooch*60.)*onBody);
+    // cropped locks falling forward from the crown
+    {
+      float rhoM=length((q-vec2(yaw*0.1,-0.30))/vec2(0.72,1.03));
+      float hm=capE(q,vec2(0.,0.28),vec2(0.86,1.0),0.335,0.5);
+      vec2 cd=q-vec2(0.10,1.42);
+      float cang=atan(cd.x,-cd.y);
+      float cr2=length(cd);
+      float cut;
+      float tf=tufts(vec2(cr2,cang*(0.25+0.45*cr2)+0.05*sin(cr2*9.)),0.10,1.6,3.,cut);
+      float zh=hm+0.05*tf;
+      float mask=smoothstep(1.0,1.025,rhoM)*smoothstep(-0.05,0.08,Y)*step(0.001,hm);
+      zB=mix(zB,max(zB,zh),mask);
+      hairB=mask;
+      deepB=max(deepB,mask*cut*0.5);
+    }
+    // beard and moustache
+    {
+      float bxc=yaw*0.3;
+      float aX=abs(X-bxc);
+      vec2 M=vec2(yaw*0.45,-0.655);
+      float cheekLine=mix(M.y-0.105,-0.12-0.36*sat(1.-aX/0.78),smoothstep(0.10,0.30,aX));
+      float ub=(X-bxc)*(1.0+0.7*sat(-(Y+0.55)))+0.05*sin(Y*7.+X*2.);
+      float cut;
+      float tf=tufts(vec2(-Y,ub),0.10,1.55,11.,cut);
+      float scal=0.05*sqrt(abs(sin(ub*15.)));
+      float taperB=1.-0.38*sat(-(Y+0.85)/0.5);
+      float zbm=capE(q,vec2(bxc,-0.82),vec2(0.80*taperB,0.58+scal),0.37,0.55);
+      float zb=zbm+0.055*tf;
+      float mask=smoothstep(cheekLine+0.012,cheekLine-0.012,Y)*step(0.001,zbm);
+      zB=mix(zB,max(zB,zb),mask);
+      vec2 mo=q-M;
+      float ax=abs(mo.x);
+      float yc=0.040-0.55*ax*ax;
+      float w=0.044*sat(1.-pow(ax/0.34,2.))+0.006;
+      float dy=(mo.y-yc)/w;
+      float lobe=sqrt(sat(1.-dy*dy))*smoothstep(0.35,0.27,ax)*(1.-0.6*exp(-ax*ax/0.0012));
+      float str=sqrt(abs(sin(dy*3.2+ax*6.)));
+      float zmo=zB+0.045*lobe+0.012*str*lobe;
+      float mmask=sat(lobe*12.);
+      zB=mix(zB,max(zB,zmo),mmask);
+      hairB=max(hairB,max(mask,mmask));
+      deepB=max(deepB,mask*cut*0.5);
+    }
   }
-  /* ---- second face: beard and moustache ---- */
-  {
-    float bxc=yaw*0.3;
-    float aX=abs(X-bxc);
-    float cheekLine=-0.12-0.36*sat(1.-aX/0.78);
-    float ub=(X-bxc)*(1.0+0.7*sat(-(Y+0.55)))+0.05*sin(Y*7.+X*2.);
-    float cut;
-    float tf=tufts(vec2(-Y,ub),0.10,1.55,11.,cut);
-    float scal=0.05*sqrt(abs(sin(ub*15.)));
-    float taperB=1.-0.38*sat(-(Y+0.85)/0.5);
-    float zbm=capE(q,vec2(bxc,-0.82),vec2(0.80*taperB,0.58+scal),0.37,0.55);
-    float zb=zbm+0.055*tf;
-    vec2 M=vec2(yaw*0.45,-0.655);
-    vec2 lq=(q-M-vec2(0.,-0.05))/vec2(0.135,0.05);
-    float lip=smoothstep(1.0,0.35,dot(lq,lq));
-    z+=lm*0.03*lip;
-    float mask=lm*smoothstep(cheekLine+0.015,cheekLine-0.015,Y)*step(0.001,zbm)*(1.-lip);
-    z=mix(z,max(z,zb),mask);
-    // moustache: two drooping lobes of strands from the philtrum
-    vec2 mo=q-M;
-    float ax=abs(mo.x);
-    float yc=0.052-0.42*ax*ax;
-    float w=0.048*sat(1.-pow(ax/0.36,2.))+0.004;
-    float dy=(mo.y-yc)/w;
-    float lobe=sqrt(sat(1.-dy*dy))*smoothstep(0.37,0.30,ax);
-    float str=sqrt(abs(sin(dy*3.2+ax*6.)));
-    float zmo=z+0.045*lobe+0.012*str*lobe;
-    float mmask=lm*sat(lobe*12.);
-    z=mix(z,max(z,zmo),mmask);
-    hairAmt=max(hairAmt,max(mask,mmask));
-    deep=max(deep,mask*cut*0.5);
-  }
+
+  /* the stone remembers: one set of forms rises through the other, which sinks away */
+  const float D=0.5;
+  float zAs=zA-D*sat(2.*lm-1.);
+  float zBs=zB-D*sat(1.-2.*lm);
+  z=smax(zAs,zBs,0.012);
+  float wB=smoothstep(-0.006,0.006,zBs-zAs);
+  float hairAmt=mix(hairA,hairB,wB);
+  float garAmt=mix(garA,garB,wB);
+  deep=mix(deepA,deepB,wB);
 
   return vec4(max(z,0.),hairAmt,garAmt,deep);
 }
@@ -554,10 +556,10 @@ float pitsF(vec2 p){
   }
   return r;
 }
-float polishG;
+float polishG,slabG;
 float micro(vec2 p,float rough,float field){
   float n=fbm3(p*48.)*0.0011+vnoise(p*140.)*0.00028;
-  float pits=(pitsF(p*48.)*0.0014+pitsF(p*17.+3.)*0.0022)*(1.-0.85*smoothstep(0.5,0.9,polishG));
+  float pits=(pitsF(p*48.)*0.0014+pitsF(p*17.+3.)*0.0022)*(1.-0.85*smoothstep(0.5,0.9,polishG))*mix(0.35,1.,slabG);
   // claw-chisel tooling on the field
   float ta=vnoise(p*5.)*3.14;
   vec2 td=vec2(cos(ta),sin(ta));
@@ -569,7 +571,7 @@ void main(){
   vec2 p=vP;
   vec4 s0=S(p);
   float h0=s0.r,polish=s0.g,slab=s0.b,deep=s0.a;
-  polishG=polish;
+  polishG=polish;slabG=slab;
 
   // macro normal from the carved heightfield
   float e=uTexel.x*1.25;
@@ -614,8 +616,8 @@ void main(){
   lime=mix(lime,lime*vec3(0.84,0.84,0.74),lich*0.6);
   float sp=hash12(floor(p*230.));
   lime*=1.-0.22*step(0.975,sp)*(1.-polish*0.5);
-  float blockId=hash12(floor((p/vec2(0.92,0.46)+vec2(0.31,0.27)+vec2(mod(floor(p.y/0.46+0.27),2.)*0.5,0.))));
-  vec3 wall=vec3(0.40,0.375,0.345)*(0.78+0.3*fbm(p*2.6))*(0.86+0.22*blockId);
+  float blockId=hash12(floor((p/vec2(1.32,0.64)+vec2(0.31,0.27)+vec2(mod(floor(p.y/0.64+0.27),2.)*0.5,0.))));
+  vec3 wall=vec3(0.33,0.31,0.285)*(0.78+0.3*fbm(p*2.6))*(0.86+0.22*blockId);
   vec3 alb=mix(wall,lime,slab);
   alb=mix(alb,alb*1.05+0.012,polish*slab*0.5);
   alb*=1.-0.42*sat(cav*0.9);
@@ -625,7 +627,7 @@ void main(){
 
   // light
   vec3 V=normalize(cameraPosition-vW);
-  float pool=0.42+0.58*exp(-dot(p*vec2(0.55,0.72),p*vec2(0.55,0.72))*1.4);
+  float pool=0.30+0.70*exp(-dot(p*vec2(0.55,0.70),p*vec2(0.55,0.70))*1.6);
   vec3 sun=vec3(1.0,0.82,0.60)*2.9*pool;
   float ndl=max(dot(n,L),0.);
   float diff=ndl*sh;
@@ -637,8 +639,10 @@ void main(){
 
   // air: a faint warm haze in the light, darkness gathering at the edges
   vec2 sc=gl_FragCoord.xy/uRes;
-  float vig=smoothstep(1.25,0.25,length((sc-0.5)*vec2(uRes.x/uRes.y,1.)*1.1));
-  col*=mix(0.35,1.0,vig);
+  float vig=smoothstep(1.2,0.2,length((sc-0.5)*vec2(uRes.x/uRes.y,1.)*1.1));
+  col*=mix(0.25,1.0,vig);
+  // warm air on the side the light comes from
+  col+=vec3(0.06,0.045,0.03)*pow(sat(1.-sc.x*0.9+(sc.y-0.5)*0.3),2.)*0.55;
   col=aces(col*0.72);
   col=pow(col,vec3(1./2.2));
   col*=uFade;
@@ -657,7 +661,7 @@ try{
   document.body.insertAdjacentHTML('beforeend','<div class="err">This piece needs WebGL.</div>');
   throw err;
 }
-const DPR=Math.min(window.devicePixelRatio||1,1.75);
+let DPR=Math.min(window.devicePixelRatio||1,1.75);
 renderer.setPixelRatio(DPR);
 renderer.setSize(innerWidth,innerHeight);
 
@@ -709,6 +713,39 @@ const wallMesh=new THREE.Mesh(new THREE.PlaneGeometry(14,9,1,1),wallMat);
 wallMesh.position.z=-0.0004;
 scene.add(wallMesh);
 
+/* dust adrift in the slanting light */
+const MOTES=170;
+const mg=new THREE.BufferGeometry();
+const mp=new Float32Array(MOTES*3),ms=new Float32Array(MOTES*4);
+for(let i=0;i<MOTES;i++){
+  mp[i*3]=(Math.random()*2-1)*2.3;mp[i*3+1]=(Math.random()*2-1)*1.35;mp[i*3+2]=0.12+Math.random()*1.5;
+  ms[i*4]=Math.random()*6.283;ms[i*4+1]=0.4+Math.random()*0.8;ms[i*4+2]=Math.random();ms[i*4+3]=0.5+Math.random();
+}
+mg.setAttribute('position',new THREE.BufferAttribute(mp,3));
+mg.setAttribute('seed',new THREE.BufferAttribute(ms,4));
+const moteMat=new THREE.ShaderMaterial({
+  uniforms:{uTime:uniforms.uTime,uFade:uniforms.uFade,uPx:{value:DPR}},
+  transparent:true,depthWrite:false,blending:THREE.AdditiveBlending,
+  vertexShader:`uniform float uTime;uniform float uPx;attribute vec4 seed;varying float vA;
+    void main(){
+      vec3 p=position;float t=uTime*seed.y;
+      p.x+=sin(t*0.21+seed.x)*0.12+uTime*0.012*seed.w;
+      p.y+=sin(t*0.17+seed.x*1.7)*0.08+mod(uTime*0.008*seed.w+seed.z*2.7,2.7)-1.35;
+      p.x=mod(p.x+2.3,4.6)-2.3;
+      p.z+=sin(t*0.13+seed.x*2.3)*0.05;
+      vec4 mv=modelViewMatrix*vec4(p,1.);
+      gl_Position=projectionMatrix*mv;
+      float tw=0.5+0.5*sin(uTime*(0.7+seed.z)+seed.x*3.);
+      float beam=smoothstep(1.6,0.2,abs(p.y+p.x*0.45-0.15));
+      vA=tw*tw*beam*(0.35+0.65*seed.z);
+      gl_PointSize=uPx*(1.4+2.2*seed.w)*(3.2/-mv.z);
+    }`,
+  fragmentShader:`uniform float uFade;varying float vA;
+    void main(){vec2 c=gl_PointCoord-0.5;float d=length(c);float a=smoothstep(0.5,0.0,d);
+      gl_FragColor=vec4(vec3(1.0,0.86,0.66)*a*vA*0.16*uFade,1.);}`
+});
+scene.add(new THREE.Points(mg,moteMat));
+
 /* ------------------------------------------------------------------ */
 /*  Scroll -> memory of the stone                                      */
 /* ------------------------------------------------------------------ */
@@ -732,7 +769,7 @@ function frameCamera(){
   const aspect=innerWidth/innerHeight;
   camera.aspect=aspect;
   const vfov=camera.fov*Math.PI/180;
-  const needH=2.18, needW=1.62;
+  const needH=2.26, needW=1.66;
   const dH=needH/(2*Math.tan(vfov/2));
   const dW=needW/(2*Math.tan(vfov/2)*aspect);
   camera.userData.dist=Math.max(dH,dW);
@@ -746,6 +783,7 @@ addEventListener('resize',()=>{
 });
 
 const clock=new THREE.Clock();
+const perf={n:0,acc:0,k:0};
 let t0=performance.now();
 function tick(){
   const now=performance.now();
@@ -775,14 +813,27 @@ function tick(){
   // a slow breathing camera, barely there
   pointerS.x+=(pointer.x-pointerS.x)*0.03;pointerS.y+=(pointer.y-pointerS.y)*0.03;
   const d=camera.userData.dist;
-  camera.position.set(0.16+0.05*Math.sin(t*0.11)-pointerS.x*0.25,-0.08+0.03*Math.sin(t*0.083)+pointerS.y*0.18,d);
-  camera.lookAt(0.0,0.0,0.05);
+  camera.position.set(0.16+0.05*Math.sin(t*0.11)-pointerS.x*0.25,-0.13+0.03*Math.sin(t*0.083)+pointerS.y*0.18,d);
+  camera.lookAt(0.0,-0.05,0.05);
 
   // ui
   dot.style.left=(mShown*100).toFixed(2)+'%';
   n1.classList.toggle('on',mShown<0.5);n2.classList.toggle('on',mShown>=0.5);
 
   renderer.render(scene,camera);
+
+  // keep the light moving smoothly: shed resolution if the device struggles
+  perf.n++;
+  if(perf.n>40){perf.acc+=dt;perf.k++;}
+  if(perf.k>=60){
+    const avg=perf.acc/perf.k;perf.acc=0;perf.k=0;
+    if(avg>0.024&&DPR>0.75){
+      DPR=Math.max(0.75,DPR-0.25);
+      renderer.setPixelRatio(DPR);renderer.setSize(innerWidth,innerHeight);
+      uniforms.uRes.value.set(innerWidth*DPR,innerHeight*DPR);
+      moteMat.uniforms.uPx.value=DPR;
+    }
+  }
   requestAnimationFrame(tick);
 }
 const MANUAL=location.hash.indexOf('manual')>=0;
@@ -795,10 +846,11 @@ if(MANUAL){
     uniforms.uL.value.set(-Math.cos(el)*Math.cos(az),Math.cos(el)*Math.sin(az),Math.sin(el));
     uniforms.uFade.value=1;uniforms.uTime.value=t;
     const d=camera.userData.dist;
-    camera.position.set(0.16+0.05*Math.sin(t*0.11),-0.08+0.03*Math.sin(t*0.083),d);
-    camera.lookAt(0,0,0.05);
+    camera.position.set(0.16+0.05*Math.sin(t*0.11),-0.13+0.03*Math.sin(t*0.083),d);
+    camera.lookAt(0,-0.05,0.05);
     dot.style.left=(m*100).toFixed(2)+'%';
     renderer.render(scene,camera);
+    const g=renderer.getContext();const px=new Uint8Array(4);g.readPixels(0,0,1,1,g.RGBA,g.UNSIGNED_BYTE,px);
     return true;
   };
   ui.classList.add('ready');

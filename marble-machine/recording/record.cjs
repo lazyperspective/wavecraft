@@ -12,6 +12,7 @@
 // usage: node record.cjs <page.html> <out.mp4> [--pre 3] [--dur 60] [--fps 30] [--w 1280] [--h 720]
 //        add --from F --to T to record only frames [F,T) (earlier frames are fast-forwarded without drawing)
 //        add --wheel "3:15:2500,20:32:-2500" to scroll with the mouse wheel; --no-click to skip the start click
+//        add --hz 60 to give the page a 60 Hz animation clock while capturing at --fps
 //        add --audio-only <existing.mp4> to re-render just the sound (draw calls stubbed) onto existing frames
 
 const { chromium } = require('playwright');
@@ -31,6 +32,9 @@ const FROM = opt('from', 0); const TO_ARG = opt('to', 0); // chunked recording: 
 const wi = argv.indexOf('--wheel');
 const WHEEL = wi >= 0 ? argv[wi + 1].split(',').map((g) => g.split(':').map(Number)) : [];
 const NO_CLICK = argv.includes('--no-click');
+// --hz 60: the page sees a 60 Hz display (two animation steps per captured frame; the
+// in-between step skips its draw calls), so pages that adapt quality to frame time aren't misled
+const HZ = opt('hz', 0);
 const ai = argv.indexOf('--audio-only'); const AUDIO_ONLY = ai >= 0 ? argv[ai + 1] : null; // existing silent/old video to re-mux
 
 const initScript = ({ maxSec, sr, audioOnly }) => {
@@ -178,7 +182,13 @@ const initScript = ({ maxSec, sr, audioOnly }) => {
     }
     if (i === clickAt && !NO_CLICK) { await page.mouse.click(W / 2, H / 2); await page.evaluate(() => document.body.click()).catch(() => {}); }
     if (FROM > 0 && i === FROM - 1 && !AUDIO_ONLY) await page.evaluate(() => window.__vt.setDraw(true)); // draw the frame before, so effects with history (trails, bloom) are warm
-    await page.evaluate((d) => window.__vt.step(d), dt);
+    if (HZ > FPS && i >= FROM) {
+      const sub = Math.round(HZ / FPS);
+      await page.evaluate(([d, k]) => { window.__vt.setDraw(false); for (let j = 0; j < k - 1; j++) window.__vt.step(d / k); window.__vt.setDraw(true); window.__vt.step(d / k); }, [dt, sub]);
+    } else if (HZ > FPS) {
+      const sub = Math.round(HZ / FPS);
+      await page.evaluate(([d, k]) => { for (let j = 0; j < k; j++) window.__vt.step(d / k); }, [dt, sub]);
+    } else await page.evaluate((d) => window.__vt.step(d), dt);
     if (ff && i >= FROM) {
       const { data } = await cdp.send('Page.captureScreenshot', { format: 'jpeg', quality: 93 });
       if (!ff.stdin.write(Buffer.from(data, 'base64'))) await new Promise((r) => ff.stdin.once('drain', r));
