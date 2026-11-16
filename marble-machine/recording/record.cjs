@@ -11,6 +11,7 @@
 //
 // usage: node record.cjs <page.html> <out.mp4> [--pre 3] [--dur 60] [--fps 30] [--w 1280] [--h 720]
 //        add --from F --to T to record only frames [F,T) (earlier frames are fast-forwarded without drawing)
+//        add --wheel "3:15:2500,20:32:-2500" to scroll with the mouse wheel; --no-click to skip the start click
 //        add --audio-only <existing.mp4> to re-render just the sound (draw calls stubbed) onto existing frames
 
 const { chromium } = require('playwright');
@@ -25,6 +26,11 @@ const PRE = opt('pre', 3), DUR = opt('dur', 60), FPS = opt('fps', 30), W = opt('
 const TOTAL = PRE + DUR;
 const SR = 48000;
 const FROM = opt('from', 0); const TO_ARG = opt('to', 0); // chunked recording: frames [from, to); no mux, keeps .video.mp4 + .wav
+// --wheel "t0:t1:px,..." sends px of mouse-wheel scrolling (negative = up) between t0 and t1 seconds,
+// eased in and out, with the pointer at the viewport centre. --no-click skips the start click.
+const wi = argv.indexOf('--wheel');
+const WHEEL = wi >= 0 ? argv[wi + 1].split(',').map((g) => g.split(':').map(Number)) : [];
+const NO_CLICK = argv.includes('--no-click');
 const ai = argv.indexOf('--audio-only'); const AUDIO_ONLY = ai >= 0 ? argv[ai + 1] : null; // existing silent/old video to re-mux
 
 const initScript = ({ maxSec, sr, audioOnly }) => {
@@ -141,7 +147,7 @@ const initScript = ({ maxSec, sr, audioOnly }) => {
 
 (async () => {
   const tmp = outPath.replace(/\.mp4$/, '');
-  const browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
+  const browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--disable-smooth-scrolling'] });
   const page = await browser.newPage({ viewport: { width: W, height: H }, deviceScaleFactor: 1 });
   const errors = [];
   page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
@@ -160,8 +166,17 @@ const initScript = ({ maxSec, sr, audioOnly }) => {
   if (FROM > 0) await page.evaluate(() => window.__vt.setDraw(false));
   const t0 = Date.now();
   let lastReal = Date.now();
+  await page.mouse.move(W / 2, H / 2);
+  const easeW = (u) => (u <= 0 ? 0 : u >= 1 ? 1 : u * u * (3 - 2 * u));
+  let wheelCarry = 0;
   for (let i = 0; i < n; i++) {
-    if (i === clickAt) { await page.mouse.click(W / 2, H / 2); await page.evaluate(() => document.body.click()).catch(() => {}); }
+    if (WHEEL.length) {
+      const a = (i * dt) / 1000, b = ((i + 1) * dt) / 1000;
+      for (const [t0, t1, px] of WHEEL) wheelCarry += px * (easeW((b - t0) / (t1 - t0)) - easeW((a - t0) / (t1 - t0)));
+      const d = Math.trunc(wheelCarry);
+      if (d) { wheelCarry -= d; await page.mouse.wheel(0, d); }
+    }
+    if (i === clickAt && !NO_CLICK) { await page.mouse.click(W / 2, H / 2); await page.evaluate(() => document.body.click()).catch(() => {}); }
     if (FROM > 0 && i === FROM - 1 && !AUDIO_ONLY) await page.evaluate(() => window.__vt.setDraw(true)); // draw the frame before, so effects with history (trails, bloom) are warm
     await page.evaluate((d) => window.__vt.step(d), dt);
     if (ff && i >= FROM) {
